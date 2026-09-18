@@ -23,7 +23,9 @@ sends commands and listens to events.
 |---|---|---|
 | `ai_send` | `req: AiSendRequest` | `requestId: string` |
 | `ai_abort` | `requestId: string` | `null` |
-| `models_list` | — | `ModelInfo[]` |
+| `models_list` | — | `ModelInfo[]` (built-in catalog + Orin Cloud when signed in) |
+| `providers_list` | — | `ProviderInfo[]` (id, label, baseUrl, keyRequired, docsUrl, hasKey) |
+| `models_fetch` | `preset_id: string` | `ModelInfo[]` (live per-provider catalog; curated for Anthropic) |
 | `provider_set_key` | `provider: string, key: string` | `null` (stores in OS credential manager) |
 | `provider_has_key` | `provider: string` | `bool` |
 
@@ -78,13 +80,16 @@ core emits an `approval-request` inside `agent-event` and blocks until
 | `auth_logout` | — | `null` |
 | `open_external` | `url: string` (http/https only) | opens the system browser — used for account creation, which lives on orinai.org |
 
-Session = `{uid, name, email, phone}`. Password sign-in calls
-`/api/auth/password`; browser sign-in uses the device grant on
-`/api/auth/device` (start → user approves the shown code on orinai.org →
-poll returns a custom token). Both exchange the custom token via Firebase
-Identity Toolkit and keep the refresh token in the OS keyring; the ID token
-(~1 h) never leaves the Rust process. In the device flow the profile is read
-from the ID-token claims.
+Session = `{uid, name, email, phone, authKind: "firebase" | "clerk"}`.
+Password sign-in calls `/api/auth/password`; browser sign-in uses the device
+grant on `/api/auth/device` (start → user approves the shown code on
+orinai.org → poll returns the approval). A Clerk approval —
+`{ auth_kind: "clerk", session_token, refresh_token?, user }` — is stored
+directly and refreshed via `POST /api/auth/clerk/refresh`; a legacy approval
+carries a Firebase custom token, exchanged via Identity Toolkit with the
+profile read from the ID-token claims. Either way the refresh credential lives
+in the OS keyring and the live token (~1 h) never leaves the Rust process.
+See `docs/CLERK-BRIDGE.md` for the server contract.
 Signed-out is a normal state: cloud features degrade to local mode, and the
 Orin Cloud models (`orin/orin-pro`, `orin/orin-flash`) only appear in
 `models_list` while a session exists.
