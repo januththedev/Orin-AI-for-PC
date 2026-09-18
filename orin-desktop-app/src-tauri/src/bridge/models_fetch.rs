@@ -39,10 +39,39 @@ pub async fn fetch_for_preset(state: &AppState, preset_id: &str) -> Result<Vec<M
         .ok_or_else(|| format!("Unknown provider “{preset_id}”."))?
         ;
 
-    let base = presets::resolve_base_url(
-        preset_id,
-        &super::store::read_setting(state, "openai_compat/baseUrl"),
-    );
+    // "curated" providers (e.g. Anthropic — no HTTP list endpoint) return the
+    // built-in catalog slice so the selector still just works after pasting a key.
+    if preset.list_kind == "curated" {
+        let signed_in = super::auth::has_session(state);
+        let mut models = super::ai_impl::catalog(signed_in)
+            .into_iter()
+            .filter(|m| m.provider == preset_id)
+            .collect::<Vec<_>>();
+        if models.is_empty() {
+            // Fall back to the two flagship Claude models if the catalog moves on.
+            models = vec![
+                to_info(preset_id, "claude-sonnet-4-5", "Claude Sonnet 4.5", preset.key_required),
+                to_info(preset_id, "claude-haiku-4", "Claude Haiku 4", preset.key_required),
+            ];
+        }
+        return Ok(models);
+    }
+
+    let per_preset_base = super::store::read_setting(state, &format!("providers/{preset_id}/baseUrl"));
+    let base = if per_preset_base.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+        per_preset_base.unwrap().trim().trim_end_matches('/').to_string()
+    } else {
+        presets::resolve_base_url(
+            preset_id,
+            &super::store::read_setting(state, "openai_compat/baseUrl"),
+        )
+    };
+    if base.trim().is_empty() {
+        return Err(format!(
+            "{} needs a base URL first (Settings → Models → Custom endpoint).",
+            preset.label
+        ));
+    }
     let key = super::ai::keyring_read(preset_id);
 
     let client = reqwest::Client::builder()
@@ -53,10 +82,15 @@ pub async fn fetch_for_preset(state: &AppState, preset_id: &str) -> Result<Vec<M
         "ollama" => client.get(format!("http://localhost:11434/api/tags")),
         _ => client.get(format!("{base}/models")),
     };
-    if preset.key_required {
-        if let Some(key) = &key {
-            request = request.bearer_auth(key);
-        }
+    for (name, value) in presets::preset_headers(preset_id) {
+        request = request.header(name, value);
+    }
+    // Attach the key whenever one is stored (some local proxies are gated
+    // even though key_required is false); require it only when the preset says so.
+    if let Some(key) = &key {
+        request = request.bearer_auth(key);
+    } else if preset.key_required {
+        return Err(format!("Add an API key for {} first (Settings → Models).", preset.label));
     }
     let response = request.send().await.map_err(|error| format!("Could not reach {label}: {error}", label = preset.label))?;
     if !response.status().is_success() {

@@ -18,7 +18,7 @@ export interface AssistantResult {
 
 export interface ModelInfo {
   id: string
-  provider: 'anthropic' | 'openai_compat' | 'mock'
+  provider: string
   label: string
   tier: 'fast' | 'balanced' | 'reasoning' | 'max'
   speed: number
@@ -162,5 +162,6 @@ export interface ProviderInfo {
   label: string
   baseUrl: string
   keyRequired: boolean
+  docsUrl: string
   hasKey: boolean
 }

@@ -102,6 +102,8 @@ pub fn models_list(state: State<'_, AppState>) -> Vec<ModelInfo> {
 }
 
 fn keyring_entry(provider: &str) -> Result<keyring::Entry, String> {
+    // Service name stays "orin-ai" for backward compat so existing users keep
+    // their stored keys after the app rename to Orin Code.
     keyring::Entry::new("orin-ai", provider).map_err(|e| e.to_string())
 }
 
@@ -122,6 +124,7 @@ pub fn providers_list() -> Vec<serde_json::Value> {
                 "label": preset.label,
                 "baseUrl": preset.base_url,
                 "keyRequired": preset.key_required,
+                "docsUrl": preset.docs_url,
                 "hasKey": keyring_read(preset.id).is_some(),
             })
         })

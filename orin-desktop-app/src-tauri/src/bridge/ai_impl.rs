@@ -239,11 +239,14 @@ pub mod openai_compat {
                 .join("\n");
             chat_messages.push(serde_json::json!({ "role": message.role, "content": text }));
         }
-        // OpenRouter etiquette headers; harmless elsewhere.
-        let mut request = reqwest::Client::new()
-            .post(format!("{base}/chat/completions"))
-            .header("HTTP-Referer", "https://orin.ai")
-            .header("X-Title", "Orin Code")
+        // Built-in provider headers (e.g. OpenRouter etiquette); the single
+        // streaming engine attaches them per preset so users never hand-write them.
+        let mut request_builder = reqwest::Client::new()
+            .post(format!("{base}/chat/completions"));
+        for (name, value) in crate::bridge::presets::preset_headers(preset_id) {
+            request_builder = request_builder.header(name, value);
+        }
+        let mut request = request_builder
             .json(&serde_json::json!({ "model": model, "stream": true, "messages": chat_messages }));
         if let Some(key) = &key {
             request = request.bearer_auth(key);

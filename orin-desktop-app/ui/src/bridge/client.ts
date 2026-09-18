@@ -112,8 +112,14 @@ function mockInvoke<T>(command: string, args: Record<string, unknown>): Promise<
       return Promise.resolve(undefined as T)
     case 'providers_list':
       return Promise.resolve([
-        { id: 'anthropic', label: 'Anthropic', baseUrl: '', keyRequired: true, hasKey: false },
-        { id: 'openai_compat', label: 'OpenAI-compatible', baseUrl: 'https://api.openai.com/v1', keyRequired: true, hasKey: false },
+        { id: 'anthropic', label: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', keyRequired: true, docsUrl: 'https://console.anthropic.com/settings/keys', hasKey: false },
+        { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', keyRequired: true, docsUrl: 'https://platform.openai.com/api-keys', hasKey: false },
+        { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', keyRequired: true, docsUrl: 'https://openrouter.ai/settings/keys', hasKey: false },
+        { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', keyRequired: true, docsUrl: 'https://platform.deepseek.com/api_keys', hasKey: false },
+        { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', keyRequired: true, docsUrl: 'https://console.groq.com/keys', hasKey: false },
+        { id: 'gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', keyRequired: true, docsUrl: 'https://aistudio.google.com/apikey', hasKey: false },
+        { id: 'ollama', label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1', keyRequired: false, docsUrl: 'https://ollama.com', hasKey: false },
+        { id: 'openai_compat', label: 'OpenAI-compatible', baseUrl: 'https://api.openai.com/v1', keyRequired: true, docsUrl: '', hasKey: false },
       ] as T)
     case 'models_fetch':
       return Promise.resolve([] as T)

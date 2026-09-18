@@ -12,21 +12,43 @@ function ModelsSection() {
   const [keys, setKeys] = useState<Record<string, string>>({})
   const [hasKey, setHasKey] = useState<Record<string, boolean>>({})
   const [savedProvider, setSavedProvider] = useState<string | null>(null)
+  const [modelCounts, setModelCounts] = useState<Record<string, number>>({})
+  const [modelErrors, setModelErrors] = useState<Record<string, string>>({})
+  const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
+  const [providers, setProviders] = useState<Array<{ id: string; label: string; docsUrl: string; keyRequired: boolean }>>([
+    { id: 'anthropic', label: 'Anthropic', docsUrl: 'https://console.anthropic.com/settings/keys', keyRequired: true },
+    { id: 'openai', label: 'OpenAI', docsUrl: 'https://platform.openai.com/api-keys', keyRequired: true },
+  ])
 
-  const providers: Array<{ id: string; label: string; hint: string }> = [
-    { id: 'anthropic', label: 'Anthropic', hint: 'Claude models — console.anthropic.com' },
-    { id: 'openai_compat', label: 'OpenAI-compatible', hint: 'OpenAI, Groq, OpenRouter, Ollama, LM Studio…' },
-  ]
+  useEffect(() => {
+    bridge
+      .providersList()
+      .then((list) => {
+        if (list.length > 0) setProviders(list.map((p) => ({ id: p.id, label: p.label, docsUrl: p.docsUrl, keyRequired: p.keyRequired })))
+      })
+      .catch(() => {})
+      .finally(() => {
+        providers.forEach((provider) => {
+          bridge
+            .providerHasKey(provider.id)
+            .then((present) => setHasKey((prev) => ({ ...prev, [provider.id]: present })))
+            .catch(() => setHasKey((prev) => ({ ...prev, [provider.id]: false })))
+        })
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     providers.forEach((provider) => {
-      bridge
-        .providerHasKey(provider.id)
-        .then((present) => setHasKey((prev) => ({ ...prev, [provider.id]: present })))
-        .catch(() => setHasKey((prev) => ({ ...prev, [provider.id]: false })))
+      if (!(provider.id in hasKey)) {
+        bridge
+          .providerHasKey(provider.id)
+          .then((present) => setHasKey((prev) => ({ ...prev, [provider.id]: present })))
+          .catch(() => setHasKey((prev) => ({ ...prev, [provider.id]: false })))
+      }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [providers])
 
   const save = async (providerId: string) => {
     const key = keys[providerId]?.trim()
@@ -42,6 +64,20 @@ function ModelsSection() {
     }
   }
 
+  const refreshModels = async (providerId: string) => {
+    setRefreshing((prev) => ({ ...prev, [providerId]: true }))
+    setModelErrors((prev) => ({ ...prev, [providerId]: '' }))
+    try {
+      const models = await bridge.modelsFetch(providerId)
+      setModelCounts((prev) => ({ ...prev, [providerId]: models.length }))
+      if (models.length === 0) setModelErrors((prev) => ({ ...prev, [providerId]: 'No models returned.' }))
+    } catch (error) {
+      setModelErrors((prev) => ({ ...prev, [providerId]: String(error) }))
+    } finally {
+      setRefreshing((prev) => ({ ...prev, [providerId]: false }))
+    }
+  }
+
   return (
     <div>
       <SettingRow label="Default model" hint="Used for new conversations — pick it from the composer’s model menu.">
@@ -52,28 +88,40 @@ function ModelsSection() {
           <div className="setting-copy">
             <span className="setting-label">{provider.label}</span>
             <span className="setting-hint">
-              {hasKey[provider.id] ? 'Key stored in Windows Credential Manager · ' : ''}
-              {provider.hint}
+              {hasKey[provider.id] ? 'Key stored in OS credential manager · ' : provider.keyRequired ? 'No key yet · ' : 'Local — no key needed · '}
+              {provider.docsUrl ? (
+                <a href="#" onClick={(e) => { e.preventDefault(); void bridge.openExternal(provider.docsUrl) }}>
+                  Get key
+                </a>
+              ) : (
+                <span>Custom endpoint</span>
+              )}
+              {provider.id in modelCounts ? ` · ${modelCounts[provider.id]} models` : ''}
               {savedProvider === provider.id ? ' · Saved ✓' : ''}
+              {modelErrors[provider.id] ? ` · ${modelErrors[provider.id]}` : ''}
             </span>
           </div>
           <div className="setting-control">
             <input
               className="text-input"
               type="password"
-              placeholder={hasKey[provider.id] ? 'Replace key…' : 'Paste API key…'}
+              placeholder={hasKey[provider.id] ? 'Replace key…' : provider.keyRequired ? 'Paste API key…' : 'Optional key…'}
               value={keys[provider.id] ?? ''}
               onChange={(event) => setKeys((prev) => ({ ...prev, [provider.id]: event.target.value }))}
             />
             <button className="connect-button" onClick={() => save(provider.id)}>
               Save
             </button>
+            <button className="connect-button" onClick={() => refreshModels(provider.id)} disabled={refreshing[provider.id]}>
+              {refreshing[provider.id] ? '…' : 'Models'}
+            </button>
           </div>
         </div>
       ))}
       <p className="settings-note">
-        Keys are stored in the OS credential manager and used only by the local Rust core — they never
-        appear in project files or conversation history.
+        Paste a key and hit Models — the live catalog loads automatically with built-in
+        endpoints and headers. Keys live in the OS credential manager and are used only
+        by the local Rust core — never in project files or history.
       </p>
     </div>
   )
