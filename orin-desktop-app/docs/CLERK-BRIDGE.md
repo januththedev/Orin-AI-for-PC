@@ -10,6 +10,13 @@ in the orinai.org codebase (not in this repo) using the Clerk account's keys.
 1. Create an application → copy **Publishable key**
    (`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`) and **Secret key** (`CLERK_SECRET_KEY`).
 2. Allowed origins: `https://orinai.org` (+ preview domains).
+3. This project uses a custom Clerk domain (`clerk.orinai.org`): finish its
+   DNS verification in Clerk dashboard → Domains, and serve the sign-in page
+   from a host covered by that setup.
+4. Key hygiene: the publishable key ships in web frontend JS (public by
+   design); the **secret key lives ONLY as a server env var** — never in the
+   desktop app, never in git, never pasted in chat. If a secret is ever
+   exposed, roll it in Clerk dashboard → API keys.
 
 ## 1. Device verify page hosts Clerk sign-in
 
