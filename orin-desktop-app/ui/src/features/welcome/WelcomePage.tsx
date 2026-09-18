@@ -63,7 +63,7 @@ export default function WelcomePage({ onEnterApp }: { onEnterApp: () => void }) 
           <div className="welcome-mark">
             <OrinMark size={56} />
           </div>
-          <h1>Welcome to Orin AI</h1>
+          <h1>Welcome to Orin Code</h1>
           <p>Chat, build, and let Orin work on your PC — powered by any model you choose.</p>
         </div>
 

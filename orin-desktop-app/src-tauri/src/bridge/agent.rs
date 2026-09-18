@@ -74,7 +74,7 @@ const DESKTOP_TOOLS_PROTOCOL: &str = "\
 
 fn build_system(task: &AgentTask, tools_enabled: bool, desktop_enabled: bool) -> String {
     let mut system = format!(
-        "You are Orin, an AI coding agent working inside the Orin AI desktop app. \
+        "You are Orin, an AI coding agent working inside the Orin Code desktop app. \
          Be concise, practical and safe. Current mode: {}. ",
         task.mode
     );

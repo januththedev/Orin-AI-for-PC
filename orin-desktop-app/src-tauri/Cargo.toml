@@ -1,7 +1,7 @@
 [package]
-name = "orin-desktop"
+name = "orin-code"
 version = "0.1.0"
-description = "Orin AI — powerful, lightweight AI coding workspace"
+description = "Orin Code — powerful, lightweight AI coding workspace"
 authors = ["Orin"]
 edition = "2021"
 

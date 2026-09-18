@@ -1,4 +1,4 @@
-# Orin AI — desktop workspace
+# Orin Code — desktop workspace
 
 Powerful, lightweight AI coding workspace: a **native Rust core** (Tauri v2) driving a **React 19 + TypeScript** UI inside the OS WebView2 runtime. No Electron — the installer is ~15 MB, cold start is sub-400 ms, and every network call, file operation, terminal, and Computer-Use action runs in Rust workers.
 

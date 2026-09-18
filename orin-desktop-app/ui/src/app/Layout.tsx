@@ -68,7 +68,7 @@ function TitleBar() {
       </div>
       <div className="titlebar-center" data-tauri-drag-region>
         <OrinMark size={18} />
-        <span className="titlebar-name">Orin AI</span>
+        <span className="titlebar-name">Orin Code</span>
       </div>
       <div className="titlebar-right">{windowControls}</div>
     </header>

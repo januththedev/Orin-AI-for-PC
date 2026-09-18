@@ -1,4 +1,4 @@
-// Orin AI — Tauri application entry. Command surface lives in `bridge/`;
+// Orin Code — Tauri application entry. Command surface lives in `bridge/`;
 // see ../../docs/BRIDGE.md for the renderer contract these implement.
 mod bridge;
 
@@ -56,5 +56,5 @@ pub fn run() {
             bridge::app_info,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Orin AI");
+        .expect("error while running Orin Code");
 }

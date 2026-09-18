@@ -243,7 +243,7 @@ pub mod openai_compat {
         let mut request = reqwest::Client::new()
             .post(format!("{base}/chat/completions"))
             .header("HTTP-Referer", "https://orin.ai")
-            .header("X-Title", "Orin AI")
+            .header("X-Title", "Orin Code")
             .json(&serde_json::json!({ "model": model, "stream": true, "messages": chat_messages }));
         if let Some(key) = &key {
             request = request.bearer_auth(key);

@@ -22,7 +22,7 @@ export function OrinMark({
   }
 
   return (
-    <span className="orin-mark" style={wrap} aria-label="Orin AI">
+    <span className="orin-mark" style={wrap} aria-label="Orin Code">
       <style>{`
         @keyframes orin-breathe { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.04); opacity: .92; } }
         @keyframes orin-flicker { 0%, 100% { opacity: 1; filter: brightness(1); } 40% { opacity: .7; filter: brightness(1.3); } 70% { opacity: .85; filter: brightness(1.1); } }
