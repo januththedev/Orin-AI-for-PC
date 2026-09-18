@@ -27,7 +27,7 @@ pub async fn generate(
     match model_id.split('/').next().unwrap_or("mock") {
         "anthropic" => anthropic::stream(model_id, system, messages, abort, &emit_chunk).await,
         "mock" => mock::stream(messages, abort, &emit_chunk).await,
-        "orin" => orin_cloud::stream(app, request_id, system, messages, abort).await,
+        "orin" => orin_cloud::stream(app, request_id, model_id, system, messages, abort).await,
         preset => {
             openai_compat::stream(
                 preset,
@@ -302,6 +302,7 @@ pub mod orin_cloud {
     pub async fn stream(
         app: &AppHandle,
         request_id: &str,
+        model_id: &str,
         system: &Option<String>,
         messages: &[AiMessage],
         abort: Arc<AtomicBool>,
@@ -315,10 +316,13 @@ pub mod orin_cloud {
         if abort.load(Ordering::Relaxed) {
             return Err("aborted".into());
         }
+        // Tier the backend can route on: "orin/orin-pro" → "orin-pro", etc.
+        // Unknown shapes default to pro so nothing silently downgrades.
+        let tier = model_id.split('/').nth(1).filter(|s| !s.is_empty()).unwrap_or("orin-pro");
         let response = reqwest::Client::new()
             .post(format!("{}/api/chat", auth::api_base()))
             .bearer_auth(token)
-            .json(&chat_payload(messages))
+            .json(&chat_payload(messages, tier))
             .send()
             .await
             .map_err(|error| format!("Network error contacting Orin AI: {error}"))?;
@@ -346,7 +350,9 @@ pub mod orin_cloud {
 
     /// Plain-chat contract (verified against api/chat.js): latest user turn is
     /// `prompt`; every prior non-empty turn becomes `history` verbatim.
-    pub fn chat_payload(messages: &[AiMessage]) -> serde_json::Value {
+    /// `model` is the tier the backend routes on ("orin-pro" | "orin-flash");
+    /// the OmniRoute layer behind /api/chat fans out to the owner key pool.
+    pub fn chat_payload(messages: &[AiMessage], model: &str) -> serde_json::Value {
         let turns: Vec<(String, String)> = messages
             .iter()
             .filter_map(|m| {
@@ -373,7 +379,7 @@ pub mod orin_cloud {
             .into_iter()
             .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
             .collect();
-        serde_json::json!({ "mode": "chat", "prompt": prompt, "history": history })
+        serde_json::json!({ "mode": "chat", "model": model, "prompt": prompt, "history": history })
     }
 
     #[cfg(test)]
@@ -394,9 +400,12 @@ pub mod orin_cloud {
 
         #[test]
         fn payload_matches_backend_contract() {
-            let payload =
-                chat_payload(&[msg("user", "hi"), msg("assistant", "hello"), msg("user", "bye")]);
+            let payload = chat_payload(
+                &[msg("user", "hi"), msg("assistant", "hello"), msg("user", "bye")],
+                "orin-pro",
+            );
             assert_eq!(payload["mode"], "chat");
+            assert_eq!(payload["model"], "orin-pro");
             assert_eq!(payload["prompt"], "bye");
             assert_eq!(payload["history"].as_array().unwrap().len(), 2);
             assert_eq!(payload["history"][0]["role"], "user");
@@ -407,10 +416,11 @@ pub mod orin_cloud {
 
         #[test]
         fn empty_history_when_only_prompt() {
-            let payload = chat_payload(&[msg("assistant", "welcome"), msg("user", "go")]);
+            let payload = chat_payload(&[msg("assistant", "welcome"), msg("user", "go")], "orin-flash");
             assert_eq!(payload["prompt"], "go");
+            assert_eq!(payload["model"], "orin-flash");
             assert_eq!(payload["history"].as_array().unwrap().len(), 1); // welcome kept
-            let solo = chat_payload(&[msg("user", "only")]);
+            let solo = chat_payload(&[msg("user", "only")], "orin-pro");
             assert_eq!(solo["history"].as_array().unwrap().len(), 0);
         }
     }
