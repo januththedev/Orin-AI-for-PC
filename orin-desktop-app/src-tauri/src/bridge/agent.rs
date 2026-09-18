@@ -9,7 +9,7 @@ use super::ai_impl;
 use super::AppState;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -50,13 +50,14 @@ Rules:\n\
 - Each block holds ONE JSON object with keys \"name\" and \"input\".\n\
 - You may emit several blocks per reply; they run in order and you receive one result each.\n\
 - Prefer read-only tools first. Only write files when the user asked for a change.\n\
-- write_file, run_command and desktop-control actions require the user's approval and may be declined.\n\
+- write_file, str_replace, run_command and desktop-control actions require the user's approval and may be declined.\n\
 - When you are finished, or when no tool is needed, reply with plain text only (no tool_call blocks).\n\n\
 Available tools:\n\
 - read_file(path) — read a text file. Paths are relative to the workspace root unless absolute.\n\
 - list_dir(path) — list a directory (use \".\" for the root).\n\
 - search_files(query) — case-insensitive text search across the workspace files.\n\
-- write_file(path, content) — create or overwrite a text file with exactly the given content.\n\
+- str_replace(path, old_str, new_str) — surgical edit: replace ONE exact occurrence of old_str with new_str. You MUST call read_file on the file first; if old_str matches 0 or 2+ places, retry with more surrounding context. Prefer this over write_file for existing files.\n\
+- write_file(path, content) — create or overwrite a text file with exactly the given content (prefer str_replace for edits).\n\
 - run_command(command) — run a shell command inside the workspace (120s limit).\n";
 
 /// Desktop control (real Windows machine). Coordinates are normalized 0..1000
@@ -87,6 +88,13 @@ fn build_system(task: &AgentTask, tools_enabled: bool, desktop_enabled: bool) ->
     if tools_enabled {
         system.push_str(TOOL_PROTOCOL);
     }
+    if task.mode == "plan" {
+        system.push_str(
+            "\n\nPlan mode: investigate with read-only tools only and finish with a \
+             step-by-step plan. Never emit write_file, str_replace, run_command, or \
+             desktop-control tool calls in this mode.\n",
+        );
+    }
     if desktop_enabled {
         system.push_str("\nControl this PC (only when the user asks you to operate their computer):\n");
         system.push_str(DESKTOP_TOOLS_PROTOCOL);
@@ -114,6 +122,87 @@ fn text_message(role: &str, text: &str) -> AiMessage {
             base64: String::new(),
         }],
     }
+}
+
+// ---------------------------------------------------------------------------
+// Trajectory log (harness-style append-only session record)
+// ---------------------------------------------------------------------------
+
+/// Best-effort JSONL record of a run — the harness idea that every run is
+/// reconstructable from a single session log. Each assistant reply, tool
+/// call/result, and completion lands here in order at
+/// `{workspace}/.orin-trajectory/{run_id}.jsonl`. The UI already streams the
+/// same items as `agent-event`s; this file is the durable copy used for
+/// resume/fork/replay debugging. Logging never blocks or fails the run.
+struct Trajectory {
+    path: Option<std::path::PathBuf>,
+    seq: u64,
+}
+
+impl Trajectory {
+    fn new(root: &Option<String>, run_id: &str) -> Self {
+        let path = root.as_ref().and_then(|r| {
+            let dir = std::path::Path::new(r).join(".orin-trajectory");
+            std::fs::create_dir_all(&dir).ok()?;
+            Some(dir.join(format!("{run_id}.jsonl")))
+        });
+        Self { path, seq: 0 }
+    }
+
+    fn log(&mut self, kind: &str, data: serde_json::Value) {
+        let Some(path) = self.path.clone() else { return };
+        self.seq += 1;
+        let record = json!({
+            "seq": self.seq,
+            "kind": kind,
+            "data": data,
+        });
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write as _;
+            let _ = writeln!(file, "{record}");
+        }
+    }
+}
+
+/// Canonical key for the read-before-edit policy: resolved path with
+/// normalized separators so `read_file` and `str_replace` agree on Windows.
+fn display_key(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Surgical string replacement — the harness-style str-replace editor core.
+/// Exactly one match of `old_str` is replaced. Zero matches → not-found error;
+/// 2+ matches → ambiguous error asking for more context. A CRLF-tolerant retry
+/// covers models that normalize Windows line endings to `\n`, without ever
+/// rewriting the rest of the file's endings.
+fn apply_str_replace(content: &str, old_str: &str, new_str: &str) -> Result<String, String> {
+    if old_str.is_empty() {
+        return Err("old_str must not be empty — copy the exact block to replace.".into());
+    }
+    let matches = content.matches(old_str).count();
+    if matches == 1 {
+        return Ok(content.replacen(old_str, new_str, 1));
+    }
+    if matches > 1 {
+        return Err(format!(
+            "old_str matches {matches} places — retry with more surrounding context so it matches exactly once."
+        ));
+    }
+    // CRLF-tolerant retry: the file uses \r\n but the model sent \n anchors.
+    if content.contains('\r') {
+        let old_crlf = old_str.replace("\r\n", "\n").replace('\n', "\r\n");
+        let crlf_matches = content.matches(old_crlf.as_str()).count();
+        if crlf_matches == 1 {
+            let new_crlf = new_str.replace("\r\n", "\n").replace('\n', "\r\n");
+            return Ok(content.replacen(old_crlf.as_str(), new_crlf.as_str(), 1));
+        }
+        if crlf_matches > 1 {
+            return Err(format!(
+                "old_str matches {crlf_matches} places — retry with more surrounding context so it matches exactly once."
+            ));
+        }
+    }
+    Err("old_str not found in the file — read the file again and copy the exact text.".into())
 }
 
 #[tauri::command]
@@ -171,6 +260,14 @@ async fn run_loop(
         serde_json::from_value(task.history.clone()).unwrap_or_default();
     messages.push(text_message("user", &task.instructions));
 
+    // Harness record + read-before-edit tracking for this run.
+    let mut trajectory = Trajectory::new(&root, &run_id);
+    trajectory.log(
+        "run_start",
+        json!({ "model": task.model_id, "mode": task.mode, "instructions": task.instructions }),
+    );
+    let mut read_set: HashSet<String> = HashSet::new();
+
     // Desktop control is a real-machine capability (GDI capture + SendInput).
     let desktop_enabled = cfg!(windows);
     let mut policy = super::cu::policy::SessionPolicy::new("windows");
@@ -182,6 +279,7 @@ async fn run_loop(
 
     for iteration in 0..MAX_ITERATIONS {
         if flag.load(Ordering::Relaxed) {
+            trajectory.log("done", json!({ "summary": "Stopped." }));
             emit(json!({ "kind": "done", "summary": "Stopped." }));
             return;
         }
@@ -202,14 +300,21 @@ async fn run_loop(
         {
             Ok(text) => text,
             Err(error) if error == "aborted" => {
+                trajectory.log("done", json!({ "summary": "Stopped." }));
                 emit(json!({ "kind": "done", "summary": "Stopped." }));
                 return;
             }
             Err(error) => {
+                trajectory.log("error", json!({ "error": error }));
                 emit(json!({ "kind": "error", "error": error }));
                 return;
             }
         };
+
+        trajectory.log(
+            "assistant",
+            json!({ "iteration": iteration, "chars": reply.chars().count(), "text": reply }),
+        );
 
         if !plan_emitted {
             plan_emitted = true;
@@ -222,7 +327,9 @@ async fn run_loop(
             if !clean.trim().is_empty() {
                 emit(json!({ "kind": "assistant-message", "text": clean }));
             }
-            emit(json!({ "kind": "done", "summary": summarize(&clean) }));
+            let summary = summarize(&clean);
+            trajectory.log("done", json!({ "summary": summary }));
+            emit(json!({ "kind": "done", "summary": summary }));
             return;
         }
         if root.is_none() && !desktop_enabled {
@@ -230,7 +337,9 @@ async fn run_loop(
             // (minus the blocks) is simply the answer.
             let clean = strip_tool_blocks(&reply);
             emit(json!({ "kind": "assistant-message", "text": clean }));
-            emit(json!({ "kind": "done", "summary": summarize(&clean) }));
+            let summary = summarize(&clean);
+            trajectory.log("done", json!({ "summary": summary }));
+            emit(json!({ "kind": "done", "summary": summary }));
             return;
         }
 
@@ -240,6 +349,7 @@ async fn run_loop(
 
         for call in calls {
             if flag.load(Ordering::Relaxed) {
+                trajectory.log("done", json!({ "summary": "Stopped." }));
                 emit(json!({ "kind": "done", "summary": "Stopped." }));
                 return;
             }
@@ -252,6 +362,7 @@ async fn run_loop(
             }
             let target = tool_target(&call.name, &call.input);
             let call_id = uuid::Uuid::new_v4().to_string();
+            trajectory.log("tool_start", json!({ "tool": call.name, "input": call.input }));
             emit(json!({
                 "kind": "tool-start",
                 "toolCallId": call_id,
@@ -262,6 +373,7 @@ async fn run_loop(
 
             let (ok, summary, feedback, frame) = execute_tool(
                 &app, &emit, &root, &call, &approvals, &flag, &mut policy, &mut desktop,
+                &mut read_set,
             )
             .await;
             if let Some((jpeg_b64, width, height)) = frame {
@@ -292,11 +404,12 @@ async fn run_loop(
                 "ok": ok,
                 "summary": summary,
             }));
+            trajectory.log("tool_end", json!({ "tool": call.name, "ok": ok, "summary": summary }));
             emit(json!({ "kind": "step", "index": step_index, "status": "done", "label": label_for(&call.name, &target) }));
             step_index += 1;
 
             let attr = match call.name.as_str() {
-                "read_file" | "write_file" | "list_dir" => format!(" path=\"{}\"", target),
+                "read_file" | "write_file" | "str_replace" | "list_dir" => format!(" path=\"{}\"", target),
                 _ => String::new(),
             };
             results.push_str(&format!(
@@ -317,6 +430,7 @@ async fn run_loop(
         "kind": "done",
         "summary": "Reached the step limit for this run — ask me to continue where I left off."
     }));
+    trajectory.log("done", json!({ "summary": "Reached the step limit for this run." }));
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +444,7 @@ fn is_supported_tool(name: &str, tools_enabled: bool, desktop_enabled: bool) -> 
     if !tools_enabled {
         return false;
     }
-    matches!(name, "read_file" | "list_dir" | "search_files" | "write_file" | "run_command")
+    matches!(name, "read_file" | "list_dir" | "search_files" | "write_file" | "str_replace" | "run_command")
 }
 
 fn is_desktop_tool(name: &str) -> bool {
@@ -361,7 +475,7 @@ fn input_str(input: &serde_json::Value, key: &str) -> Option<String> {
 
 fn tool_target(tool: &str, input: &serde_json::Value) -> String {
     match tool {
-        "read_file" | "write_file" => input_str(input, "path").unwrap_or_default(),
+        "read_file" | "write_file" | "str_replace" => input_str(input, "path").unwrap_or_default(),
         "list_dir" => input_str(input, "path").unwrap_or_else(|| ".".into()),
         "search_files" => input_str(input, "query").unwrap_or_default(),
         "run_command" => input_str(input, "command").unwrap_or_default(),
@@ -377,6 +491,7 @@ fn label_for(tool: &str, target: &str) -> String {
     match tool {
         "read_file" => format!("Reading {}", file_name_of(target)),
         "write_file" => format!("Writing {}", file_name_of(target)),
+        "str_replace" => format!("Editing {}", file_name_of(target)),
         "list_dir" => format!("Listing {short}"),
         "search_files" => format!("Searching “{short}”"),
         "run_command" => format!("Running “{short}”"),
@@ -413,6 +528,7 @@ async fn execute_tool<E: Fn(serde_json::Value) + Send + Sync>(
     flag: &Arc<AtomicBool>,
     policy: &mut super::cu::policy::SessionPolicy,
     desktop: &mut Option<super::cu::AnyController>,
+    read_set: &mut HashSet<String>,
 ) -> ToolOutcome {
     // --- Desktop control tools --------------------------------------------
     if is_desktop_tool(call.name.as_str()) {
@@ -429,7 +545,7 @@ async fn execute_tool<E: Fn(serde_json::Value) + Send + Sync>(
             None,
         );
     };
-    let (ok, summary, feedback) = execute_workspace_tool(emit, &root, call, approvals, flag).await;
+    let (ok, summary, feedback) = execute_workspace_tool(emit, &root, call, approvals, flag, read_set).await;
     (ok, summary, feedback, None)
 }
 
@@ -439,6 +555,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
     call: &ToolCall,
     approvals: &Arc<Mutex<HashMap<String, bool>>>,
     flag: &Arc<AtomicBool>,
+    read_set: &mut HashSet<String>,
 ) -> (bool, String, String) {
     let root_path = std::path::Path::new(root);
 
@@ -451,6 +568,9 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
             let full = resolve(root_path, &path);
             match tokio::fs::read_to_string(&full).await {
                 Ok(content) => {
+                    // Read-before-edit policy: surgical edits require a fresh
+                    // read of the same resolved path earlier in this run.
+                    read_set.insert(display_key(&full));
                     let chars = content.chars().count();
                     let (fed, truncated_note) = truncate_chars(&content, TOOL_RESULT_CHAR_LIMIT);
                     let note = if truncated_note {
@@ -497,6 +617,83 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
             } else {
                 let summary = format!("{} match{} for “{query}”", hits.len(), if hits.len() == 1 { "" } else { "es" });
                 (true, summary.clone(), hits.join("\n"))
+            }
+        }
+
+        "str_replace" => {
+            let path = input_str(&call.input, "path").unwrap_or_default();
+            let old_str = input_str(&call.input, "old_str").unwrap_or_default();
+            let new_str = input_str(&call.input, "new_str").unwrap_or_default();
+            if path.trim().is_empty() {
+                return (false, "Missing path".into(), "ERROR: str_replace needs a path, old_str, and new_str.".into());
+            }
+            if old_str.is_empty() {
+                return (false, "Missing old_str".into(), "ERROR: str_replace needs old_str (the exact block to replace) and new_str.".into());
+            }
+            let full = resolve(root_path, &path);
+            if !read_set.contains(&display_key(&full)) {
+                return (
+                    false,
+                    "Read first".into(),
+                    format!("ERROR: read \"{path}\" with read_file before editing it, then copy old_str exactly."),
+                );
+            }
+            let content = match tokio::fs::read_to_string(&full).await {
+                Ok(c) => c,
+                Err(e) => {
+                    let msg = friendly_io_error(&e);
+                    return (false, format!("Could not read {path}: {msg}"), format!("ERROR reading \"{path}\": {msg}"));
+                }
+            };
+            let updated = match apply_str_replace(&content, &old_str, &new_str) {
+                Ok(u) => u,
+                Err(e) => return (false, "No edit applied".into(), format!("ERROR: {e}")),
+            };
+
+            // Same review flow as write_file: the diff reaches the UI before
+            // approval so the user sees exactly what will change.
+            let diff = simple_line_diff(&content, &updated);
+            let (plus, minus) = count_diff_lines(&diff);
+            emit(json!({
+                "kind": "diff",
+                "path": path,
+                "change": "modified",
+                "diffUnified": diff,
+                "changeSummary": format!("+{plus} −{minus} lines"),
+            }));
+
+            let approval_id = uuid::Uuid::new_v4().to_string();
+            emit(json!({
+                "kind": "approval-request",
+                "approvalId": approval_id,
+                "tool": "str_replace",
+                "title": format!("Edit {}", file_name_of(&path)),
+                "detail": format!("Orin wants to apply a surgical edit to {path} (+{plus} −{minus})."),
+                "destructive": false,
+            }));
+
+            match wait_approval(approvals, &approval_id, flag).await {
+                Some(true) => match tokio::fs::write(&full, &updated).await {
+                    Ok(()) => (
+                        true,
+                        format!("Edited {} (+{plus} −{minus})", file_name_of(&path)),
+                        format!("OK: applied surgical edit to {path}."),
+                    ),
+                    Err(e) => {
+                        let msg = friendly_io_error(&e);
+                        (false, format!("Could not write {path}: {msg}"), format!("ERROR writing \"{path}\": {msg}"))
+                    }
+                },
+                Some(false) => (
+                    false,
+                    "Change declined".into(),
+                    format!("SKIPPED: the user declined the edit to \"{path}\"."),
+                ),
+                None => (
+                    false,
+                    "Approval timed out".into(),
+                    format!("SKIPPED: approval for \"{path}\" timed out."),
+                ),
             }
         }
 
@@ -1193,6 +1390,10 @@ mod tests {
         assert_eq!(tool_target("mouse_click", &json!({"x": 10, "y": 20})), "");
         assert_eq!(label_for("screenshot", ""), "Looking at the screen");
         assert_eq!(label_for("press_key", "ctrl+s"), "Pressing ctrl+s");
+        assert!(is_supported_tool("str_replace", true, false));
+        assert!(!is_supported_tool("str_replace", false, false));
+        assert_eq!(tool_target("str_replace", &json!({"path": "src/main.rs"})), "src/main.rs");
+        assert_eq!(label_for("str_replace", "src/main.rs"), "Editing main.rs");
     }
 
     #[test]
@@ -1202,5 +1403,24 @@ mod tests {
         assert_eq!(clamp01k(5000.0), 1000.0);
         assert_eq!(coord(&json!({"x": 12.5}), "x"), Some(12.5));
         assert_eq!(coord(&json!({"y": "7"}), "y"), None); // numbers only
+    }
+
+    #[test]
+    fn str_replace_exact_ambiguous_and_missing() {
+        let content = "line one\nline two\nline three\n";
+        let updated = apply_str_replace(content, "line two\n", "LINE TWO\n").unwrap();
+        assert_eq!(updated, "line one\nLINE TWO\nline three\n");
+        let err = apply_str_replace("a\nb\na\n", "a\n", "z\n").unwrap_err();
+        assert!(err.contains("2 places"), "unexpected: {err}");
+        let err = apply_str_replace(content, "nope\n", "z\n").unwrap_err();
+        assert!(err.contains("not found"), "unexpected: {err}");
+        assert!(apply_str_replace(content, "", "z").is_err());
+    }
+
+    #[test]
+    fn str_replace_tolerates_crlf_anchors() {
+        let content = "first\r\nsecond\r\nthird\r\n";
+        let updated = apply_str_replace(content, "second\n", "SECOND\n").unwrap();
+        assert_eq!(updated, "first\r\nSECOND\r\nthird\r\n");
     }
 }
