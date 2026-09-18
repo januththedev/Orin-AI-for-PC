@@ -59,15 +59,15 @@ export const OrinMark = ({
 				/>
 			))}
 
-			<svg
-				viewBox="0 0 120 120" width={size} height={size}
-				style={{ position: 'relative', zIndex: 1, overflow: 'visible' }}
-				role="img" aria-label="Orin AI"
-			>
-				{/* Background rounded rect */}
-				<rect x="4" y="4" width="112" height="112" rx="26" fill="#1c1c1a" />
+		<svg
+			viewBox="0 0 120 120" width={size} height={size}
+			style={{ position: 'relative', zIndex: 1, overflow: 'visible' }}
+			role="img" aria-label="Orin AI"
+		>
+			{/* Background rounded rect */}
+			<rect x="4" y="4" width="112" height="112" rx="26" fill="#1c1c1a" />
 
-				{/* Bolt path with animation */}
+			{/* Bolt path with animation */}
 				<path
 					d="M69 20 L38 66 L58 66 L50 100 L86 54 L64 54 Z"
 					fill={accent}
