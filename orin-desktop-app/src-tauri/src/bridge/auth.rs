@@ -1,16 +1,17 @@
-// Bridge: Orin AI account sign-in and Firebase token lifecycle.
+// Bridge: Orin AI account sign-in and session lifecycle.
 // Cloud calls live here, never in the renderer. See docs/BRIDGE.md §Account.
 //
-// Password flow: POST /api/auth/password → { customToken, user } → Identity
-// Toolkit signInWithCustomToken → { idToken, refreshToken }.
-// Browser flow: /api/auth/device device grant — start → user approves on
-// orinai.org → poll returns a custom token → same exchange; the profile then
-// comes from the ID-token claims instead of the password endpoint.
+// Two credential kinds share one session shape (`Session.auth_kind`):
+// - "firebase" (legacy): password/device flows mint a Firebase custom token,
+//   exchanged via Identity Toolkit; refresh via securetoken.googleapis.com.
+// - "clerk": the browser device flow signs in with Clerk on orinai.org and the
+//   backend returns an opaque session token (+ refresh token). Refresh goes to
+//   POST {api_base}/api/auth/clerk/refresh — no Google endpoints involved.
 //
-// The refresh token goes to
-// the OS keyring; the ID token (~1 h) stays in memory and is refreshed
-// proactively when <10 min of life remains. Signed-out is a normal state:
-// callers treat ensure_id_token's Err as "not signed in" and degrade locally.
+// The refresh/session token goes to the OS keyring; the live token (~1 h)
+// stays in memory and is refreshed proactively when <10 min of life remains.
+// Signed-out is a normal state: callers treat ensure_id_token's Err as "not
+// signed in" and degrade locally (BYOK providers keep working untouched).
 use super::store;
 use super::AppState;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -37,6 +38,14 @@ pub struct Session {
     pub email: String,
     #[serde(default)]
     pub phone: String,
+    /// Credential family: "firebase" (legacy) or "clerk". Defaults to
+    /// "firebase" for sessions stored before Clerk existed.
+    #[serde(default = "default_auth_kind")]
+    pub auth_kind: String,
+}
+
+fn default_auth_kind() -> String {
+    "firebase".into()
 }
 
 #[derive(Serialize)]
@@ -185,8 +194,71 @@ async fn persist_session(state: &AppState, tokens: Tokens, session: Session) -> 
     Ok(session)
 }
 
-/// A valid Firebase ID token for cloud calls, refreshing proactively.
-/// A rare double-refresh race is acceptable: the server treats it as idempotent.
+/// Persist a backend-minted opaque session (Clerk flow): no Google exchange.
+/// The live token is cached exactly like an ID token so cloud callers are
+/// agnostic to which family minted it.
+async fn persist_opaque(
+    state: &AppState,
+    session_token: &str,
+    refresh_token: &str,
+    expires_in_secs: u64,
+    session: Session,
+) -> Result<Session, String> {
+    store_refresh(&session.uid, refresh_token)?;
+    save_session(state, &session)?;
+    let mut cache = state.auth_cache.lock().map_err(|_| "cache lock poisoned")?;
+    cache.id_token = Some(session_token.to_string());
+    cache.expires_at_ms = Some(now_ms() + expires_in_secs * 1000);
+    Ok(session)
+}
+
+/// Parse the Clerk approval shape from POST /api/auth/device:
+/// `{ status: "approved", auth_kind: "clerk", session_token, refresh_token?,
+///   expires_in?, user: { id, name?, email?, phone? } }`.
+/// Returns (session_token, refresh_token, expires_in_secs, session).
+fn clerk_session_from_reply(reply: &serde_json::Value) -> Option<(String, String, u64, Session)> {
+    if reply.get("auth_kind").and_then(|v| v.as_str()) != Some("clerk")
+        && reply.get("session_token").is_none()
+    {
+        return None;
+    }
+    let token = reply["session_token"].as_str()?.to_string();
+    if token.is_empty() {
+        return None;
+    }
+    let refresh = reply["refresh_token"].as_str().unwrap_or(&token).to_string();
+    let expires_in = reply["expires_in"].as_u64().unwrap_or(3600);
+    let u = &reply["user"];
+    let email = u["email"].as_str().unwrap_or_default().to_string();
+    let uid = u["id"].as_str().unwrap_or_default().to_string();
+    if uid.is_empty() {
+        return None;
+    }
+    let name = u["name"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            email.split('@').next().filter(|s| !s.is_empty()).unwrap_or("Orin user").to_string()
+        });
+    Some((
+        token,
+        refresh,
+        expires_in,
+        Session {
+            uid,
+            name,
+            email,
+            phone: u["phone"].as_str().unwrap_or_default().to_string(),
+            auth_kind: "clerk".into(),
+        },
+    ))
+}
+
+/// A valid live token for cloud calls, refreshing proactively.
+/// Firebase sessions refresh via Google; Clerk sessions refresh via the
+/// backend (`POST /api/auth/clerk/refresh`). Signed-out callers get Err and
+/// degrade to local/BYOK mode.
 pub async fn ensure_id_token(state: &AppState) -> Result<String, String> {
     {
         let cache = state.auth_cache.lock().map_err(|_| "cache lock poisoned")?;
@@ -197,6 +269,9 @@ pub async fn ensure_id_token(state: &AppState) -> Result<String, String> {
         }
     }
     let session = load_session(state).ok_or("signed-out")?;
+    if session.auth_kind == "clerk" {
+        return refresh_clerk_token(state, &session).await;
+    }
     let refresh = load_refresh(&session.uid)
         .ok_or("signed-in but no stored credential — sign in again")?;
     let result = post_json(
@@ -210,6 +285,33 @@ pub async fn ensure_id_token(state: &AppState) -> Result<String, String> {
     cache.id_token = Some(tokens.id_token.clone());
     cache.expires_at_ms = Some(now_ms() + tokens.expires_in_secs * 1000);
     Ok(tokens.id_token)
+}
+
+/// Refresh a Clerk family session against the backend. Contract:
+/// request `POST {api_base}/api/auth/clerk/refresh { refresh_token }`,
+/// response `{ session_token, refresh_token?, expires_in? }`.
+async fn refresh_clerk_token(state: &AppState, session: &Session) -> Result<String, String> {
+    let refresh = load_refresh(&session.uid)
+        .ok_or("signed-in but no stored credential — sign in again")?;
+    let reply = post_json(
+        &format!("{}/api/auth/clerk/refresh", api_base()),
+        serde_json::json!({ "refresh_token": refresh }),
+    )
+    .await?;
+    let token = reply["session_token"].as_str().ok_or("no session_token returned")?.to_string();
+    if token.is_empty() {
+        return Err("no session_token returned".into());
+    }
+    if let Some(next) = reply["refresh_token"].as_str() {
+        if !next.is_empty() {
+            store_refresh(&session.uid, next)?;
+        }
+    }
+    let expires_in = reply["expires_in"].as_u64().unwrap_or(3600);
+    let mut cache = state.auth_cache.lock().map_err(|_| "cache lock poisoned")?;
+    cache.id_token = Some(token.clone());
+    cache.expires_at_ms = Some(now_ms() + expires_in * 1000);
+    Ok(token)
 }
 
 /// Cheap signed-in check for gating UI (no network).
@@ -241,6 +343,7 @@ pub async fn auth_login(
         name: s["name"].as_str().unwrap_or_default().to_string(),
         email: s["email"].as_str().unwrap_or_default().to_string(),
         phone: s["phone"].as_str().unwrap_or_default().to_string(),
+        auth_kind: default_auth_kind(),
     };
     establish(state.inner(), &custom, session).await
 }
@@ -279,6 +382,7 @@ pub async fn auth_register(
             .to_string(),
         email: s["email"].as_str().unwrap_or_default().to_string(),
         phone: s["phone"].as_str().unwrap_or_default().to_string(),
+        auth_kind: default_auth_kind(),
     };
     establish(state.inner(), &custom, session).await
 }
@@ -305,9 +409,11 @@ pub fn auth_logout(state: State<'_, AppState>) -> Result<(), String> {
 // ── Device flow (browser sign-in handoff) ────────────────────────────────────
 //
 // Mirrors /api/auth/device: start → open orinai.org in the system browser →
-// the user signs in there and approves the matching code → polling picks up a
-// custom token, which goes through the same Identity Toolkit exchange as the
-// password flow.
+// the user signs in there (Clerk, once hosted on the verify page) and approves
+// the matching code → polling picks up the approval. A Clerk approval carries
+// `{ auth_kind: "clerk", session_token, refresh_token?, user }` and is stored
+// directly; a legacy approval carries a Firebase `custom_token` and goes
+// through the Identity Toolkit exchange as before.
 
 fn open_in_browser(url: &str) {
     #[cfg(target_os = "windows")]
@@ -344,8 +450,13 @@ fn b64url_decode(segment: &str) -> Option<Vec<u8>> {
 /// Device-flow approval returns only a custom token — rebuild the profile from
 /// the ID-token claims (uid/email always; name falls back to email local-part).
 fn session_from_id_token(id_token: &str) -> Session {
-    let fallback =
-        |name: &str| Session { uid: String::new(), name: name.into(), email: String::new(), phone: String::new() };
+    let fallback = |name: &str| Session {
+        uid: String::new(),
+        name: name.into(),
+        email: String::new(),
+        phone: String::new(),
+        auth_kind: default_auth_kind(),
+    };
     let payload = id_token
         .split('.')
         .nth(1)
@@ -370,6 +481,7 @@ fn session_from_id_token(id_token: &str) -> Session {
         name,
         email,
         phone: payload["phone_number"].as_str().unwrap_or_default().to_string(),
+        auth_kind: default_auth_kind(),
     }
 }
 
@@ -421,6 +533,13 @@ pub async fn auth_device_wait(device_code: String, state: State<'_, AppState>) -
         .await?;
         match reply["status"].as_str().unwrap_or_default() {
             "approved" => {
+                // Clerk shape first (server returns it once orinai.org hosts
+                // Clerk sign-in on the verify page); Firebase custom_token
+                // otherwise. Both land in the same session/keyring slots, so
+                // the rest of the app never branches on family.
+                if let Some((token, refresh, expires_in, session)) = clerk_session_from_reply(&reply) {
+                    return persist_opaque(state.inner(), &token, &refresh, expires_in, session).await;
+                }
                 let custom = reply["custom_token"].as_str().ok_or("no custom token returned")?;
                 let tokens = exchange_custom_token(custom).await?;
                 let session = session_from_id_token(&tokens.id_token);
@@ -505,5 +624,41 @@ mod tests {
         assert!(device_code_valid(&good));
         assert!(!device_code_valid("short"));
         assert!(!device_code_valid(&format!("{}z", "f".repeat(63)))); // z is not hex
+    }
+
+    #[test]
+    fn clerk_approval_shape_parses() {
+        let reply = serde_json::json!({
+            "status": "approved",
+            "auth_kind": "clerk",
+            "session_token": "sess_live_123",
+            "refresh_token": "sess_refresh_456",
+            "expires_in": 3600,
+            "user": { "id": "user_abc", "name": "Ann", "email": "ann@example.com" },
+        });
+        let (token, refresh, expires, session) = clerk_session_from_reply(&reply).unwrap();
+        assert_eq!(token, "sess_live_123");
+        assert_eq!(refresh, "sess_refresh_456");
+        assert_eq!(expires, 3600);
+        assert_eq!(session.uid, "user_abc");
+        assert_eq!(session.auth_kind, "clerk");
+
+        // Legacy Firebase approval has neither marker → None → old path.
+        let legacy = serde_json::json!({ "status": "approved", "custom_token": "ct" });
+        assert!(clerk_session_from_reply(&legacy).is_none());
+
+        // Missing uid or empty token → None, never a half session.
+        let no_uid = serde_json::json!({ "auth_kind": "clerk", "session_token": "t", "user": {} });
+        assert!(clerk_session_from_reply(&no_uid).is_none());
+        let no_token = serde_json::json!({ "auth_kind": "clerk", "user": { "id": "u" } });
+        assert!(clerk_session_from_reply(&no_token).is_none());
+    }
+
+    #[test]
+    fn legacy_sessions_default_to_firebase() {
+        // Sessions stored before auth_kind existed must keep working.
+        let stored = serde_json::json!({ "uid": "u1", "name": "Bo", "email": "bo@x.io", "phone": "" });
+        let s: Session = serde_json::from_value(stored).unwrap();
+        assert_eq!(s.auth_kind, "firebase");
     }
 }
