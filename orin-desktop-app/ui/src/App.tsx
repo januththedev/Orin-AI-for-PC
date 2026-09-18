@@ -18,9 +18,23 @@ export default function App() {
       // Auth is not part of hydrateAll — the welcome gate needs it first.
       await useAuthStore.getState().hydrate()
       const signedIn = useAuthStore.getState().status?.signedIn ?? false
-      const hasKey =
-        (await bridge.providerHasKey('anthropic').catch(() => false)) ||
-        (await bridge.providerHasKey('openai_compat').catch(() => false))
+      // Any stored provider key counts — the preset catalog (P2 router) can
+      // grow, so ask the core which providers take keys instead of hardcoding.
+      // `openai_compat` is the legacy keyring slot, kept for older installs.
+      let hasKey = false
+      try {
+        const providers = await bridge.providersList()
+        const ids = providers.length > 0
+          ? providers.filter((p) => p.keyRequired).map((p) => p.id)
+          : ['anthropic', 'openai_compat']
+        for (const id of [...ids, 'openai_compat']) {
+          try {
+            if (await bridge.providerHasKey(id)) { hasKey = true; break }
+          } catch { /* try next slot */ }
+        }
+      } catch {
+        hasKey = false
+      }
       const dismissed = await bridge
         .storeGet<number>('onboarding.dismissed')
         .then((value) => value === 1)
