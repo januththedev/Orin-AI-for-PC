@@ -445,6 +445,21 @@ function TelegramSection() {
           )}
         </div>
       </div>
+      <div className="setting-row">
+        <div className="setting-copy">
+          <span className="setting-label">Run phone tasks on this PC</span>
+          <span className="setting-hint">
+            Off unless you say so. When on, tasks you confirm on Telegram run here
+            with approvals pre-granted — every step stays in the local audit trail.
+          </span>
+        </div>
+        <div className="setting-control">
+          <Toggle
+            checked={useSettingsStore.getState().phoneTasks}
+            onChange={(value) => useSettingsStore.getState().update({ phoneTasks: value })}
+          />
+        </div>
+      </div>
     </div>
   )
 }

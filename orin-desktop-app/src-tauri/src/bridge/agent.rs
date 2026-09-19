@@ -27,6 +27,11 @@ pub struct AgentTask {
     pub workspace_root: Option<String>,
     #[serde(rename = "projectInstructions", default)]
     pub project_instructions: Option<String>,
+    /// Phone-confirmed remote tasks only: the user already tapped Run on
+    /// Telegram, so approvals auto-resolve (still emitted + logged).
+    /// NEVER set for local runs — the UI never offers it.
+    #[serde(default, rename = "autoApprove")]
+    pub auto_approve: bool,
 }
 
 #[derive(Deserialize)]
@@ -287,6 +292,9 @@ async fn run_loop(
         let state = app.state::<super::AppState>();
         super::telegram::mirror_for_run(state.inner()).await
     };
+    // Phone-confirmed remote tasks arrive pre-approved (the user tapped Run
+    // for this exact task). Local runs always ask.
+    let auto_approve = task.auto_approve;
 
     // Desktop control is a real-machine capability (GDI capture + SendInput).
     let desktop_enabled = cfg!(windows);
@@ -410,7 +418,7 @@ async fn run_loop(
 
             let (ok, summary, feedback, frame) = execute_tool(
                 &app, &emit, &root, &call, &approvals, &flag, &mut policy, &mut desktop,
-                &mut read_set, &mut mirror,
+                &mut read_set, &mut mirror, auto_approve,
             )
             .await;
             if let Some((jpeg_b64, width, height)) = frame {
@@ -595,10 +603,11 @@ async fn execute_tool<E: Fn(serde_json::Value) + Send + Sync>(
     desktop: &mut Option<super::cu::AnyController>,
     read_set: &mut HashSet<String>,
     mirror: &mut Option<super::telegram::PhoneMirror>,
+    auto_approve: bool,
 ) -> ToolOutcome {
     // --- Desktop control tools --------------------------------------------
     if is_desktop_tool(call.name.as_str()) {
-        return execute_desktop_tool(app, emit, call, approvals, flag, policy, desktop, mirror).await;
+        return execute_desktop_tool(app, emit, call, approvals, flag, policy, desktop, mirror, auto_approve).await;
     }
 
     // Workspace tools need an open folder.
@@ -613,7 +622,7 @@ async fn execute_tool<E: Fn(serde_json::Value) + Send + Sync>(
     };
     let (ok, summary, feedback) = {
         let state = app.state::<super::AppState>();
-        execute_workspace_tool(emit, &root, call, approvals, flag, read_set, state.inner(), mirror).await
+        execute_workspace_tool(emit, &root, call, approvals, flag, read_set, state.inner(), mirror, auto_approve).await
     };
     (ok, summary, feedback, None)
 }
@@ -627,6 +636,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
     read_set: &mut HashSet<String>,
     mcp_state: &super::AppState,
     mirror: &mut Option<super::telegram::PhoneMirror>,
+    auto_approve: bool,
 ) -> (bool, String, String) {
     let root_path = std::path::Path::new(root);
 
@@ -742,6 +752,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 format!("Edit {}", file_name_of(&path)),
                 format!("Orin wants to apply a surgical edit to {path} (+{plus} −{minus})."),
                 false,
+                auto_approve,
             )
             .await;
             match decision {
@@ -800,6 +811,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 if existed { format!("Modify {}", file_name_of(&path)) } else { format!("Create {}", file_name_of(&path)) },
                 format!("Orin wants to {} {}.", if existed { "modify" } else { "create" }, path),
                 false,
+                auto_approve,
             )
             .await;
             match decision {
@@ -857,6 +869,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                     format!("{connector_label} {} {}", method.to_uppercase(), path),
                     format!("Orin wants to call {connector_label} ({} {}) — credentials stay server-side.", method.to_uppercase(), path),
                     true,
+                    auto_approve,
                 )
                 .await
                 {
@@ -913,6 +926,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 format!("MCP {server} → {tool}"),
                 format!("Orin wants to call {tool} on {server}. Keys stay server-side."),
                 true,
+                auto_approve,
             )
             .await
             {
@@ -937,6 +951,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 "Run shell command".into(),
                 command.chars().take(300).collect::<String>(),
                 true,
+                auto_approve,
             )
             .await
             {
@@ -1012,6 +1027,7 @@ async fn execute_desktop_tool<E: Fn(serde_json::Value) + Send + Sync>(
     policy: &mut super::cu::policy::SessionPolicy,
     desktop: &mut Option<super::cu::AnyController>,
     mirror: &mut Option<super::telegram::PhoneMirror>,
+    auto_approve: bool,
 ) -> ToolOutcome {
     #[cfg(not(windows))]
     {
@@ -1059,6 +1075,7 @@ async fn execute_desktop_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 match request_approval(
                     emit, approvals, flag, mirror, &approval_id,
                     &call.name, need.title, need.detail, need.destructive,
+                    auto_approve,
                 )
                 .await
                 {
@@ -1222,6 +1239,10 @@ async fn wait_approval(
 /// One gate for every mutating tool: emit the approval-request event, mirror
 /// it to the linked phone (best-effort — a dead link disables mirroring for
 /// the rest of the run), then wait for either side to decide.
+///
+/// Phone-confirmed runs (`auto_approve`) resolve immediately: the user tapped
+/// Run on Telegram for THIS task, so each approval is pre-granted — still
+/// emitted to the UI and trajectory log for a full audit trail.
 async fn request_approval<E: Fn(serde_json::Value) + Send + Sync>(
     emit: &E,
     approvals: &Arc<Mutex<HashMap<String, bool>>>,
@@ -1232,6 +1253,7 @@ async fn request_approval<E: Fn(serde_json::Value) + Send + Sync>(
     title: String,
     detail: String,
     destructive: bool,
+    auto_approve: bool,
 ) -> Option<bool> {
     emit(json!({
         "kind": "approval-request",
@@ -1240,7 +1262,11 @@ async fn request_approval<E: Fn(serde_json::Value) + Send + Sync>(
         "title": title,
         "detail": detail,
         "destructive": destructive,
+        "auto": auto_approve,
     }));
+    if auto_approve {
+        return Some(true);
+    }
     if let Some(m) = mirror.as_ref() {
         if !super::telegram::mirror_push(m, id, tool, &title, &detail).await {
             *mirror = None;

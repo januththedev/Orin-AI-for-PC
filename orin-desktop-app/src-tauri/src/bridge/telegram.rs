@@ -243,13 +243,23 @@ pub async fn mirror_for_run(state: &AppState) -> Option<PhoneMirror> {
     Some(PhoneMirror { api_base, token })
 }
 
-/// Pairing code for Settings → Notifications ("Link phone").
+/// Pairing code for Settings → Notifications ("Link phone"). Registers this
+/// machine first so tasks later route ONLY here — never to a stranger's PC.
 #[tauri::command]
 pub async fn pc_link_start(state: State<'_, AppState>) -> Result<String, String> {
     let token = super::auth::ensure_id_token(state.inner())
         .await
         .map_err(|_| "Sign in to Settings → Account first.".to_string())?;
-    let reply = authed(&api_base(), &token, "start", serde_json::json!({})).await?;
+    let reply = authed(
+        &api_base(),
+        &token,
+        "start",
+        serde_json::json!({
+            "machine_id": machine_id(state.inner()),
+            "machine_name": machine_name(),
+        }),
+    )
+    .await?;
     reply["code"].as_str().map(str::to_string).ok_or("No pairing code returned.".into())
 }
 
@@ -269,4 +279,75 @@ pub async fn pc_link_unlink(state: State<'_, AppState>) -> Result<(), String> {
         .map_err(|_| "Sign in to Settings → Account first.".to_string())?;
     authed(&api_base(), &token, "unlink", serde_json::json!({})).await?;
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct PhoneTask {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub instructions: String,
+}
+
+/// Oldest queued phone task for MY machine (or null). Machine identity is
+/// generated once and kept in local settings — tasks can only ever land on
+/// the PC the user linked.
+#[tauri::command]
+pub async fn pc_task_poll(state: State<'_, AppState>) -> Result<Option<PhoneTask>, String> {
+    let token = super::auth::ensure_id_token(state.inner()).await.map_err(|_| "signed-out".to_string())?;
+    let machine_id = machine_id(state.inner());
+    let reply = authed(
+        &api_base(),
+        &token,
+        "task_poll",
+        serde_json::json!({ "machine_id": machine_id }),
+    )
+    .await?;
+    let task = reply.get("task");
+    if task.is_none() || task.unwrap().is_null() {
+        return Ok(None);
+    }
+    let task = task.unwrap();
+    Ok(Some(PhoneTask {
+        task_id: task["taskId"].as_str().unwrap_or_default().to_string(),
+        instructions: task["instructions"].as_str().unwrap_or_default().to_string(),
+    }))
+}
+
+/// Report a finished phone task; the server forwards the summary to Telegram.
+#[tauri::command]
+pub async fn pc_task_result(
+    task_id: String,
+    ok: bool,
+    summary: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let token = super::auth::ensure_id_token(state.inner()).await.map_err(|_| "signed-out".to_string())?;
+    authed(
+        &api_base(),
+        &token,
+        "task_result",
+        serde_json::json!({ "taskId": task_id, "ok": ok, "summary": summary }),
+    )
+    .await?;
+    Ok(())
+}
+
+fn machine_id(state: &AppState) -> String {
+    const KEY: &str = "phone.machine_id";
+    if let Some(existing) = super::store::read_setting(state, KEY) {
+        if !existing.trim().is_empty() {
+            return existing;
+        }
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let _ = super::store::write_setting(state, KEY, &id);
+    id
+}
+
+/// Friendly PC name for the bot ("Run this on X?"). OS hostname, sanitized.
+pub fn machine_name() -> String {
+    let raw = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "My PC".into());
+    raw.trim().chars().take(80).collect()
 }

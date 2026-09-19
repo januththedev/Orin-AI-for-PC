@@ -132,7 +132,15 @@ export function AiPanel({ root, project }: { root: string | null; project: Proje
       case 'approval-request':
         // Diff cards that carry an approval id answer it themselves (see the
         // render filter below); standalone cards cover run_command, desktop
-        // tools, and anything else without a diff.
+        // tools, and anything else without a diff. Pre-approved phone tasks
+        // arrive resolved on both.
+        if (event.auto) {
+          setDiffs((prev) =>
+            prev.map((diff) =>
+              diff.approvalId === event.approvalId ? { ...diff, resolved: 'accepted' as const } : diff,
+            ),
+          )
+        }
         setApprovals((prev) => {
           if (prev.some((card) => card.id === event.approvalId)) return prev
           return [
@@ -143,6 +151,7 @@ export function AiPanel({ root, project }: { root: string | null; project: Proje
               title: event.title,
               detail: event.detail,
               destructive: event.destructive,
+              resolved: event.auto ? 'accepted' : undefined,
             },
           ]
         })

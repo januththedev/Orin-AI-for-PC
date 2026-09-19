@@ -6,6 +6,7 @@ import type { ModelInfo } from './bridge/types'
 import { useUiStore } from './stores/uiStore'
 import { useAuthStore } from './stores/authStore'
 import { useSettingsStore } from './stores/settingsStore'
+import { useProjectsStore } from './stores/projectsStore'
 import { StealthModal } from './components/StealthModal'
 
 type Phase = 'booting' | 'welcome' | 'app'
@@ -70,6 +71,73 @@ export default function App() {
     useSettingsStore.getState().update({ defaultModelId: model.id })
     setStealth([])
   }
+
+  // Phone tasks: linked + explicitly enabled → poll the server queue and run
+  // confirmed tasks headlessly in the active project's workspace, reporting
+  // back so the bot forwards the result. Runs are pre-approved (the user
+  // tapped Run for that exact task) with a full local audit trail.
+  const phoneTasks = useSettingsStore((s) => s.phoneTasks)
+  useEffect(() => {
+    if (phase !== 'app' || !phoneTasks) return
+    let cancelled = false
+    let busy = false
+    let off: (() => void) | null = null
+    const tick = async () => {
+      if (cancelled || busy) return
+      busy = true
+      try {
+        const task = await bridge.pcTaskPoll().catch(() => null)
+        if (!task || cancelled) return
+        const projects = useProjectsStore.getState().projects
+        const activeId = useProjectsStore.getState().activeProjectId
+        const project =
+          projects.find((p) => p.id === activeId && p.rootPath) ??
+          projects.find((p) => p.rootPath) ??
+          null
+        if (!project) {
+          await bridge.pcTaskResult(task.taskId, false, 'No workspace folder is open on this PC.').catch(() => {})
+          return
+        }
+        const parts = [project.customInstructions?.trim()]
+        if (project.designSystem?.trim()) {
+          parts.push(
+            `Design system — brand contract. Follow it in every design/Studio output:\n${project.designSystem.trim()}`,
+          )
+        }
+        const projectInstructions = parts.filter(Boolean).join('\n\n') || undefined
+        const modelId = useSettingsStore.getState().defaultModelId
+        useUiStore.getState().toast('info', 'Phone task running', task.instructions.slice(0, 120))
+        const runId = await bridge.agentRun({
+          modelId,
+          mode: 'agent',
+          instructions: task.instructions,
+          history: [],
+          workspaceRoot: project.rootPath,
+          projectInstructions,
+          autoApprove: true,
+        })
+        off?.()
+        off = bridge.onAgentEvent(runId, (event) => {
+          if (event.kind === 'done') {
+            bridge.pcTaskResult(task.taskId, true, event.summary).catch(() => {})
+          } else if (event.kind === 'error') {
+            bridge.pcTaskResult(task.taskId, false, event.error).catch(() => {})
+          }
+        })
+      } catch {
+        // next tick retries — the server holds the task until claimed
+      } finally {
+        busy = false
+      }
+    }
+    void tick()
+    const timer = setInterval(tick, 15000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      off?.()
+    }
+  }, [phase, phoneTasks])
 
   if (phase === 'booting') {
     return (

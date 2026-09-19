@@ -43,6 +43,8 @@ pub fn run() {
             bridge::telegram::pc_link_start,
             bridge::telegram::pc_link_status,
             bridge::telegram::pc_link_unlink,
+            bridge::telegram::pc_task_poll,
+            bridge::telegram::pc_task_result,
             bridge::connectors::connector_set_cred,
             bridge::connectors::connector_has_cred,
             bridge::connectors::connector_test,

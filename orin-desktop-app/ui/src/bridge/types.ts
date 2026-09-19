@@ -66,6 +66,8 @@ export interface AgentTask {
   history: AiMessage[]
   workspaceRoot?: string
   projectInstructions?: string
+  /** Phone-confirmed runs only — approvals pre-granted, still logged. */
+  autoApprove?: boolean
 }
 
 export type AgentEvent =
@@ -90,6 +92,8 @@ export type AgentEvent =
       title: string
       detail: string
       destructive: boolean
+      /** Pre-approved (phone-confirmed task) — shown as resolved, no buttons. */
+      auto?: boolean
     }
   | { kind: 'done'; summary: string }
   | { kind: 'error'; error: string }

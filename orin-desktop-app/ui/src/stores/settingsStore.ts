@@ -12,6 +12,8 @@ interface SettingsState {
   defaultModelId: string
   defaultMode: 'chat' | 'cowork' | 'agent' | 'computer'
   cloudSync: boolean
+  /** Run phone-confirmed Telegram tasks on this PC (explicit opt-in). */
+  phoneTasks: boolean
   hydrate: () => Promise<void>
   update: (patch: Partial<Omit<SettingsState, 'hydrate' | 'update'>>) => void
 }
@@ -27,6 +29,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   defaultModelId: 'mock/orin-offline',
   defaultMode: 'chat',
   cloudSync: true,
+  phoneTasks: false,
 
   hydrate: async () => {
     try {

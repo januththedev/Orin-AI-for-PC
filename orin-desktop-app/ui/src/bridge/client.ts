@@ -77,6 +77,8 @@ function mockInvoke<T>(command: string, args: Record<string, unknown>): Promise<
       return Promise.resolve(false as T)
     case 'pc_link_status':
       return Promise.resolve(false as T)
+    case 'pc_task_poll':
+      return Promise.resolve(null as T)
     case 'connector_has_cred':
       return Promise.resolve(false as T)
     case 'connector_test':
@@ -221,6 +223,10 @@ export const bridge = {
   pcLinkStart: (): Promise<string> => invoke('pc_link_start'),
   pcLinkStatus: (): Promise<boolean> => invoke('pc_link_status'),
   pcLinkUnlink: () => invoke<void>('pc_link_unlink'),
+  pcTaskPoll: (): Promise<{ taskId: string; instructions: string } | null> =>
+    invoke('pc_task_poll'),
+  pcTaskResult: (taskId: string, ok: boolean, summary: string): Promise<void> =>
+    invoke('pc_task_result', { taskId, ok, summary }),
 
   // connectors (service creds in OS keyring; validated live; agent-safe)
   connectorSetCred: (id: string, token: string) => invoke<void>('connector_set_cred', { id, token }),

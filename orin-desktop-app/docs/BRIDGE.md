@@ -114,7 +114,9 @@ the toggle lives in Settings ▸ Account.
 | `telegram_notify` | `chatId: string, text: string` | `null` |
 | `pc_link_start` | — | pairing `code` (10 min TTL; send `/link CODE` to the Orin Code bot) |
 | `pc_link_status` | — | `bool` (phone linked) |
-| `pc_link_unlink` | — | `null` |
+| `pc_link_unlink` | — | `null` (also kills pending phone tasks server-side) |
+| `pc_task_poll` | — | `{ taskId, instructions } \| null` (claims oldest queued task for this PC) |
+| `pc_task_result` | `taskId, ok, summary` | `null` (server forwards the summary to Telegram) |
 
 ### Connections (external services for the agent)
 | Command | Args | Returns |
