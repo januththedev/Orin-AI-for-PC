@@ -198,12 +198,20 @@ export function Composer({
   const recordTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // -- model catalog -----------------------------------------------------
+  // Static catalog first (instant, works offline), then live OpenRouter
+  // models merged in — the picker always reflects the current catalog,
+  // never a frozen list.
   useEffect(() => {
     let cancelled = false
     bridge
       .modelsList()
       .then((list) => {
         if (!cancelled) setModels(list)
+        return bridge.modelsFetch('openrouter').catch(() => [] as ModelInfo[])
+      })
+      .then((live) => {
+        if (cancelled || live.length === 0) return
+        setModels((prev) => mergeLiveModels(prev, live))
       })
       .catch(() => {})
     return () => {
@@ -599,4 +607,12 @@ function groupModels(models: ModelInfo[]): Array<[ModelInfo['provider'], ModelIn
     else groups.set(model.provider, [model])
   }
   return Array.from(groups.entries())
+}
+
+/** Merge a live fetch into the static catalog: known ids keep their curated
+ * metadata, unknown live ids are appended so new/stealth models appear. */
+function mergeLiveModels(base: ModelInfo[], live: ModelInfo[]): ModelInfo[] {
+  const seen = new Set(base.map((m) => m.id))
+  const extra = live.filter((m) => !seen.has(m.id))
+  return extra.length > 0 ? [...base, ...extra] : base
 }
