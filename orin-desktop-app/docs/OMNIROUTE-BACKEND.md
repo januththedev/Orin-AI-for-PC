@@ -254,11 +254,17 @@ decision.
 
 ## 6. What "automatically routed when something happens" means here
 
-- 429/5xx/timeout/empty → next key, same provider → next provider hop.
-- Bad auth or unknown model → skip remaining keys of that hop (don't burn
-  good keys on a config error), continue down the chain.
-- Total failure → `502` with the failure trail; desktop shows
-  `Orin AI error 502 …` (nothing crashes, chat history intact).
+Reference implementation: `api/_lib/omni.js` in the website repo (this
+doc's §4 sketch was its draft — the live file is authoritative).
+
+- 429/5xx/timeout/empty → cool the key 60s, try the NEXT KEY on the same model.
+- 401/403 (bad key) → quarantine that key for the rest of the request and
+  keep going with the other keys — one dead key never blocks the next model.
+- 400/404 (bad/unknown model) → skip straight to the NEXT MODEL in the tier.
+- Every key cooling down → one last-resort pass ignoring cooldowns instead
+  of failing instantly.
+- Total failure → `502` with the failure trail (`model: reason` per hop);
+  desktop shows `Orin AI error 502 …` (nothing crashes, chat history intact).
 - Your plan gate stays **before** the router, so user quota is enforced
   once per request, not per attempt.
 
