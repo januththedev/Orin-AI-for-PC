@@ -35,20 +35,30 @@ OpenAI   Anthropic   DeepSeek/Groq/…   OpenRouter (many keys)
 
 ## 2. Key pool config (your manyyy keys)
 
-One env var per provider, comma-separated for multiple keys. The router
-round-robins healthy keys and cools down failures — adding a key is a
-redeploy with zero code changes:
+Numbered env vars per provider (Vercel-friendly) — the router collects
+`OPENROUTER_1 … OPENROUTER_20` in order and round-robins healthy keys with
+per-key cooldown on failure. Adding, rotating, or removing a key is a redeploy
+with zero code changes. A legacy comma-separated var is still accepted as a
+fallback (`OPENROUTER_KEYS=sk-or-...,sk-or-...`).
 
 ```bash
-OPENAI_KEYS=sk-...,sk-...
-ANTHROPIC_KEYS=sk-ant-...,sk-ant-...
-DEEPSEEK_KEYS=sk-...,sk-...
-OPENROUTER_KEYS=sk-or-...,sk-or-...
-GROQ_KEYS=gsk_...,gsk_...
-GEMINI_KEYS=AIza...,AIza...
-XAI_KEYS=xai-...,xai-...
-MISTRAL_KEYS=...,-cohere/perplexity/together/fireworks likewise
+OPENROUTER_1=sk-or-...
+OPENROUTER_2=sk-or-...
+OPENROUTER_3=sk-or-...
+OPENROUTER_4=sk-or-...
+OPENROUTER_5=sk-or-...
+OPENROUTER_6=sk-or-...
+# …add OPENROUTER_7 etc. whenever you want — no code change needed
+ANTHROPIC_1=sk-ant-...
+OPENAI_1=sk-...
+DEEPSEEK_1=sk-...
+# (same _1.._20 pattern for GROQ_, GEMINI_, XAI_, MISTRAL_, COHERE_,
+#  PERPLEXITY_, TOGETHER_, FIREWORKS_)
 ```
+
+One router serves **both** frontends: the website chatbot and the PC app
+call the same `/api/chat` (or import `route()` from `lib/omniroute.ts`
+directly) — same key pool, same failover, same quota metering.
 
 Never log keys. Health state lives in memory (per server instance):
 `{ failures, cooledUntil }` per key.
@@ -73,7 +83,15 @@ const CHAINS: Record<string, Hop[]> = {
 ```
 
 Unknown `model` values fall back to the `orin-pro` chain (desktop also
-defaults to pro, so nothing silently downgrades).
+defaults to pro, so nothing silently downgrades). Hops whose pool is empty
+are skipped automatically.
+
+> OpenRouter-only setup (your case): keep the chains as-is but point every
+> hop at `openrouter` with different model ids — e.g. `orin-pro` →
+> `anthropic/claude-sonnet-4`, then `openai/gpt-4.1`, then
+> `deepseek/deepseek-chat`, then a `:free` model as last resort. All 6
+> `OPENROUTER_*` keys are tried per hop before moving on, so one key
+> hitting a limit never stops an answer.
 
 ## 4. Paste-ready router — `lib/omniroute.ts` (Next.js, no new deps)
 
@@ -86,8 +104,17 @@ const COOLDOWN_MS = 60_000;
 const TIMEOUT_MS = 60_000;
 const health = new Map<string, number>(); // key -> cooledUntil timestamp
 
-function pool(name: string): string[] {
-  return (process.env[name] ?? "").split(",").map(s => s.trim()).filter(Boolean);
+function pool(prefix: string, legacy?: string): string[] {
+  // Numbered vars first: OPENROUTER_1 … OPENROUTER_20 (Vercel-friendly).
+  const numbered: string[] = []
+  for (let i = 1; i <= 20; i++) {
+    const key = (process.env[`${prefix}_${i}`] ?? "").trim()
+    if (key) numbered.push(key)
+  }
+  if (numbered.length > 0) return numbered;
+  // Fallback: legacy comma-separated var, e.g. OPENROUTER_KEYS.
+  if (legacy) return (process.env[legacy] ?? "").split(",").map(s => s.trim()).filter(Boolean);
+  return [];
 }
 const BASE: Record<string, string> = {
   openai: "https://api.openai.com/v1",
@@ -102,11 +129,19 @@ const BASE: Record<string, string> = {
   together: "https://api.together.xyz/v1",
   fireworks: "https://api.fireworks.ai/inference/v1",
 };
-const ENVKEY: Record<string, string> = {
-  openai: "OPENAI_KEYS", anthropic: "ANTHROPIC_KEYS", deepseek: "DEEPSEEK_KEYS",
-  groq: "GROQ_KEYS", xai: "XAI_KEYS", mistral: "MISTRAL_KEYS",
-  gemini: "GEMINI_KEYS", openrouter: "OPENROUTER_KEYS", cohere: "COHERE_KEYS",
-  perplexity: "PERPLEXITY_KEYS", together: "TOGETHER_KEYS", fireworks: "FIREWORKS_KEYS",
+const ENVKEY: Record<string, [prefix: string, legacy: string]> = {
+  openai: ["OPENAI", "OPENAI_KEYS"],
+  anthropic: ["ANTHROPIC", "ANTHROPIC_KEYS"],
+  deepseek: ["DEEPSEEK", "DEEPSEEK_KEYS"],
+  groq: ["GROQ", "GROQ_KEYS"],
+  xai: ["XAI", "XAI_KEYS"],
+  mistral: ["MISTRAL", "MISTRAL_KEYS"],
+  gemini: ["GEMINI", "GEMINI_KEYS"],
+  openrouter: ["OPENROUTER", "OPENROUTER_KEYS"],
+  cohere: ["COHERE", "COHERE_KEYS"],
+  perplexity: ["PERPLEXITY", "PERPLEXITY_KEYS"],
+  together: ["TOGETHER", "TOGETHER_KEYS"],
+  fireworks: ["FIREWORKS", "FIREWORKS_KEYS"],
 };
 
 async function tryOpenAICompat(hop: Hop, key: string, messages: any[]): Promise<Attempt> {
@@ -163,7 +198,8 @@ export async function route(
 ): Promise<string> {
   const errors: string[] = [];
   for (const hop of chain) {
-    const keys = pool(ENVKEY[hop.provider] ?? "").filter(k => (health.get(k) ?? 0) < Date.now());
+    const [prefix, legacy] = ENVKEY[hop.provider] ?? [hop.provider.toUpperCase(), ""];
+    const keys = pool(prefix, legacy).filter(k => (health.get(k) ?? 0) < Date.now());
     for (const key of keys) {
       const attempt = hop.provider === "anthropic"
         ? await tryAnthropic(hop, key, args.system, args.messages)
