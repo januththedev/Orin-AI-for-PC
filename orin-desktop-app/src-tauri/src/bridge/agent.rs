@@ -55,7 +55,8 @@ Rules:\n\
 - service_request reaches connected external services (github/slack/notion). Tokens are injected server-side — never ask the user for them.\n\
 - write_file, str_replace, run_command, service_request writes, and desktop-control actions ask the user and may be declined; a decline is FINAL — work around it or report back, never retry the same call.\n\
 - On ERROR: read the message, fix YOUR input (wrong path? bad JSON shape? missing read?), retry differently at most twice, then change approach or report. NEVER emit the identical call twice in a row.\n\
-- When finished, or when no tool is needed, reply with plain text only (no tool_call blocks).\n\n\
+- When finished, or when no tool is needed, reply with plain text only (no tool_call blocks).\n\
+- Research questions: if a research MCP server (e.g. Consensus) is connected, search it via mcp_list_tools/mcp_call and ground the answer in real papers — cite title, year, and DOI or journal for each claim, and say plainly when evidence is thin.\n\n\
 Available tools:\n\
 - read_file(path) — read a text file (workspace-relative unless absolute).\n\
 - list_dir(path) — list a directory (\".\" = root).\n\

@@ -12,6 +12,7 @@ import {
   Shapes,
   SlidersHorizontal,
   Monitor,
+  Sparkles,
 } from 'lucide-react'
 import { bridge } from '../bridge/client'
 import { OrinMark } from '../components/OrinMark'
@@ -78,6 +79,7 @@ function TitleBar() {
 const NAV_ITEMS: Array<{ id: ViewId; label: string; icon: typeof Home }> = [
   { id: 'projects', label: 'Projects', icon: FolderClosed },
   { id: 'artifacts', label: 'Artifacts', icon: Shapes },
+  { id: 'studio', label: 'Studio', icon: Sparkles },
   { id: 'computer', label: 'Computer Use', icon: Monitor },
   { id: 'customize', label: 'Customize', icon: SlidersHorizontal },
 ]

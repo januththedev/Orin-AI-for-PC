@@ -114,6 +114,19 @@ export function ProjectDetail({ project, onBack }: { project: Project; onBack: (
                 }}
               />
             </label>
+            <label className="field field-wide">
+              <span className="field-label">Design system (DESIGN.md)</span>
+              <textarea
+                className="field-textarea"
+                rows={6}
+                placeholder="Brand contract for Studio work — palette hex codes, fonts, component rules. The agent reads this on every run…"
+                defaultValue={project.designSystem}
+                onBlur={(event) => {
+                  if (event.target.value !== (project.designSystem ?? ''))
+                    update(project.id, { designSystem: event.target.value })
+                }}
+              />
+            </label>
           </div>
         </section>
 

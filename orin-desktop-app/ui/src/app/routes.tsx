@@ -12,6 +12,7 @@ const CustomizePage = lazy(() => import('../features/settings/CustomizePage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
 const SkillsPage = lazy(() => import('../features/settings/SkillsPage'))
 const ConnectorsPage = lazy(() => import('../features/settings/ConnectorsPage'))
+const StudioPage = lazy(() => import('../features/studio/StudioPage'))
 
 export function CurrentView({ view }: { view: ViewId }) {
   switch (view) {
@@ -21,6 +22,8 @@ export function CurrentView({ view }: { view: ViewId }) {
       return <ProjectsPage />
     case 'artifacts':
       return <ArtifactsPage />
+    case 'studio':
+      return <StudioPage />
     case 'ide':
       return <IdePage />
     case 'computer':
@@ -52,6 +55,7 @@ export const viewComponents = {
   ChatPage,
   ProjectsPage,
   ArtifactsPage,
+  StudioPage,
   IdePage,
   ComputerUsePage,
   CustomizePage,

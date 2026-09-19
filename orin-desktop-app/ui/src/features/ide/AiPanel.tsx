@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Play, Square, ChevronDown, ChevronUp } from 'lucide-react'
 import { bridge } from '../../bridge/client'
 import { useSettingsStore } from '../../stores/settingsStore'
+import type { Project } from '../../stores/projectsStore'
 import type { AgentEvent } from '../../bridge/types'
 
 interface PlanState {
@@ -37,7 +38,7 @@ interface ApprovalCard {
 
 type RunMode = 'plan' | 'agent'
 
-export function AiPanel({ root }: { root: string | null }) {
+export function AiPanel({ root, project }: { root: string | null; project: Project | null }) {
   const modelId = useSettingsStore((state) => state.defaultModelId)
   const [instructions, setInstructions] = useState('')
   const [running, setRunning] = useState(false)
@@ -69,6 +70,14 @@ export function AiPanel({ root }: { root: string | null }) {
     if (!instructions.trim() || running) return
     reset()
     setRunning(true)
+    // Project brain: standing instructions + the DESIGN.md brand contract.
+    const parts = [project?.customInstructions?.trim()]
+    if (project?.designSystem?.trim()) {
+      parts.push(
+        `Design system — brand contract. Follow it in every design/Studio output (colors, fonts, components):\n${project.designSystem.trim()}`,
+      )
+    }
+    const projectInstructions = parts.filter(Boolean).join('\n\n') || undefined
     try {
       const runId = await bridge.agentRun({
         modelId,
@@ -76,6 +85,7 @@ export function AiPanel({ root }: { root: string | null }) {
         instructions: instructions.trim(),
         history: [],
         workspaceRoot: root ?? undefined,
+        projectInstructions,
       })
       runIdRef.current = runId
       offRef.current?.()

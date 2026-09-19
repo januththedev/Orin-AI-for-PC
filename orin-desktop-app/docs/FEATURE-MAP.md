@@ -104,13 +104,21 @@ owns network, files, terminals, keys). Contract: `docs/BRIDGE.md`.
   gallery with preview + time-ago, Home dashboard, Customize, Skills,
   command palette, history search, cloud sync
   (`sync_pull/push`, opt-out, 512 KB cap).
+- **Studio** (design part, no third-party branding): brief composer + six
+  artifact-type templates (landing, dashboard, deck, document, mobile, brand
+  kit) that seed a build conversation with a baked expert brief; the agent
+  builds real files that preview in Artifacts.
+- **DESIGN.md brand contract**: per-project design-system text in Project
+  settings, injected into every agent run's project instructions.
 - Connections (Settings): GitHub / Slack / Notion credentials in OS
   keyring slots with live Test validation and status pills; the agent's
   `service_request` tool calls them with tokens injected server-side
   (GET free, writes ask approval). MCP servers (Gmail/Drive/OneDrive via
   hosted Streamable-HTTP endpoints — no Google Cloud/Azure setup) with
-  handshake + tool-count test; the agent self-discovers via
-  `mcp_list_tools` and calls via approval-gated `mcp_call`. Telegram bot
+  handshake + tool-count test, including one-click **Consensus Research**
+  (`https://mcp.consensus.app/mcp`, no key needed); the agent
+  self-discovers via `mcp_list_tools` and calls via approval-gated
+  `mcp_call`, with a research-grounding rule in its prompt. Telegram bot
   token the same way plus test-send. Google Drive stays honestly
   OAuth-gated.
 

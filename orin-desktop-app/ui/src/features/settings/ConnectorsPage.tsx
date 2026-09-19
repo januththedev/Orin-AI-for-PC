@@ -235,6 +235,22 @@ function McpSection() {
     await refresh()
   }
 
+  const addConsensus = async () => {
+    setBusy(true)
+    setNote('')
+    try {
+      const id = await bridge.mcpAddServer('Consensus Research', 'https://mcp.consensus.app/mcp')
+      const summary = await bridge.mcpTest(id)
+      setToolCounts((prev) => ({ ...prev, [id]: summary }))
+      setNote(`Connected — ${summary} ✓ Sign in at consensus.app for full limits.`)
+      await refresh()
+    } catch (error) {
+      setNote(String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div style={{ marginTop: 18 }}>
       <div className="setting-row">
@@ -247,6 +263,11 @@ function McpSection() {
             provider&apos;s endpoint. No Google Cloud / Azure app setup: the provider owns OAuth, you
             paste a URL + key. The agent discovers tools itself.
           </span>
+        </div>
+        <div className="setting-control">
+          <button className="connect-button" disabled={busy} onClick={() => void addConsensus()}>
+            {busy ? '…' : 'Add Consensus Research'}
+          </button>
         </div>
       </div>
       {servers.map((s) => (

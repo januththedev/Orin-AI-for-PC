@@ -18,6 +18,8 @@ export interface Project {
   rootPath: string
   description: string
   customInstructions: string
+  /** Brand contract for Studio/design work (DESIGN.md contents). Fed to the agent. */
+  designSystem: string
   knowledge: KnowledgeFile[]
   createdAt: string
   updatedAt: string
@@ -66,8 +68,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     try {
       const saved = await bridge.storeGet<{ projects?: Project[]; activeProjectId?: string | null }>(PROJECTS_KEY)
       if (saved && typeof saved === 'object') {
+        // Forward-fill fields added after some installs (e.g. designSystem).
+        const projects = Array.isArray(saved.projects)
+          ? saved.projects.map((p) => ({ ...p, designSystem: p.designSystem ?? '' }))
+          : []
         set({
-          projects: Array.isArray(saved.projects) ? saved.projects : [],
+          projects,
           activeProjectId: saved.activeProjectId ?? null,
           hydrated: true,
         })
@@ -86,6 +92,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       rootPath: '',
       description: '',
       customInstructions: '',
+      designSystem: '',
       knowledge: [],
       createdAt: now(),
       updatedAt: now(),
@@ -105,6 +112,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       rootPath: pick.path,
       description: '',
       customInstructions: '',
+      designSystem: '',
       knowledge: [],
       createdAt: now(),
       updatedAt: now(),

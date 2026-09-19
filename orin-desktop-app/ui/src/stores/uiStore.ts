@@ -7,6 +7,7 @@ export type ViewId =
   | 'chat'
   | 'projects'
   | 'artifacts'
+  | 'studio'
   | 'customize'
   | 'settings'
   | 'skills'
