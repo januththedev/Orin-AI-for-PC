@@ -551,6 +551,34 @@ fn device_code_valid(code: &str) -> bool {
     code.len() == 64 && code.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// Pure reading of one device-poll reply — the exact server contract from
+/// docs/BACKEND-CONTRACT.md, testable without network.
+enum DevicePoll {
+    Pending,
+    Denied,
+    Expired,
+    ApprovedClerk(String, String, u64, Session),
+    ApprovedFirebase(String),
+    Invalid(String),
+}
+
+fn device_poll_action(reply: &serde_json::Value) -> DevicePoll {
+    match reply["status"].as_str().unwrap_or_default() {
+        "approved" => {
+            if let Some((token, refresh, expires, session)) = clerk_session_from_reply(reply) {
+                DevicePoll::ApprovedClerk(token, refresh, expires, session)
+            } else if let Some(custom) = reply["custom_token"].as_str() {
+                DevicePoll::ApprovedFirebase(custom.to_string())
+            } else {
+                DevicePoll::Invalid("no custom token returned".into())
+            }
+        }
+        "denied" => DevicePoll::Denied,
+        "expired" => DevicePoll::Expired,
+        _ => DevicePoll::Pending,
+    }
+}
+
 #[tauri::command]
 pub async fn auth_device_wait(device_code: String, state: State<'_, AppState>) -> Result<Session, String> {
     if !device_code_valid(&device_code) {
@@ -564,23 +592,22 @@ pub async fn auth_device_wait(device_code: String, state: State<'_, AppState>) -
             serde_json::json!({ "action": "token", "device_code": device_code.clone() }),
         )
         .await?;
-        match reply["status"].as_str().unwrap_or_default() {
-            "approved" => {
-                // Clerk shape first (server returns it once orinai.org hosts
-                // Clerk sign-in on the verify page); Firebase custom_token
-                // otherwise. Both land in the same session/keyring slots, so
-                // the rest of the app never branches on family.
-                if let Some((token, refresh, expires_in, session)) = clerk_session_from_reply(&reply) {
-                    return persist_opaque(state.inner(), &token, &refresh, expires_in, session).await;
-                }
-                let custom = reply["custom_token"].as_str().ok_or("no custom token returned")?;
-                let tokens = exchange_custom_token(custom).await?;
+        match device_poll_action(&reply) {
+            DevicePoll::ApprovedClerk(token, refresh, expires_in, session) => {
+                // Clerk shape (server returns it once orinai.org hosts
+                // Clerk sign-in on the verify page). Same session/keyring
+                // slots as Firebase, so the rest of the app never branches.
+                return persist_opaque(state.inner(), &token, &refresh, expires_in, session).await;
+            }
+            DevicePoll::ApprovedFirebase(custom) => {
+                let tokens = exchange_custom_token(&custom).await?;
                 let session = session_from_id_token(&tokens.id_token);
                 return persist_session(state.inner(), tokens, session).await;
             }
-            "denied" => return Err("Sign-in was denied in the browser.".into()),
-            "expired" => return Err("The sign-in request expired — start again.".into()),
-            _ => {} // pending — keep polling
+            DevicePoll::Denied => return Err("Sign-in was denied in the browser.".into()),
+            DevicePoll::Expired => return Err("The sign-in request expired — start again.".into()),
+            DevicePoll::Invalid(message) => return Err(message),
+            DevicePoll::Pending => {} // keep polling
         }
         if std::time::Instant::now() >= deadline {
             return Err("Timed out waiting for approval — start again.".into());
@@ -657,6 +684,55 @@ mod tests {
         assert!(device_code_valid(&good));
         assert!(!device_code_valid("short"));
         assert!(!device_code_valid(&format!("{}z", "f".repeat(63)))); // z is not hex
+    }
+
+    #[test]
+    fn device_poll_covers_every_server_shape() {
+        // Pending (and anything unknown) keeps polling.
+        assert!(matches!(device_poll_action(&serde_json::json!({ "status": "pending" })), DevicePoll::Pending));
+        assert!(matches!(device_poll_action(&serde_json::json!({})), DevicePoll::Pending));
+        assert!(matches!(device_poll_action(&serde_json::json!({ "status": "denied" })), DevicePoll::Denied));
+        assert!(matches!(device_poll_action(&serde_json::json!({ "status": "expired" })), DevicePoll::Expired));
+
+        // Clerk approval carries tokens + profile.
+        let clerk = serde_json::json!({
+            "status": "approved", "auth_kind": "clerk",
+            "session_token": "sess", "refresh_token": "refr", "expires_in": 3600,
+            "user": { "id": "u1", "name": "Ann", "email": "a@x.io" },
+        });
+        match device_poll_action(&clerk) {
+            DevicePoll::ApprovedClerk(token, refresh, expires, session) => {
+                assert_eq!(token, "sess");
+                assert_eq!(refresh, "refr");
+                assert_eq!(expires, 3600);
+                assert_eq!(session.uid, "u1");
+                assert_eq!(session.auth_kind, "clerk");
+            }
+            other => panic!("expected clerk approval, got {}", poll_name(&other)),
+        }
+
+        // Legacy Firebase approval carries only the custom token.
+        match device_poll_action(&serde_json::json!({ "status": "approved", "custom_token": "ct" })) {
+            DevicePoll::ApprovedFirebase(custom) => assert_eq!(custom, "ct"),
+            other => panic!("expected firebase approval, got {}", poll_name(&other)),
+        }
+
+        // Approved with neither is a server bug — surfaced, never hung on.
+        match device_poll_action(&serde_json::json!({ "status": "approved" })) {
+            DevicePoll::Invalid(message) => assert!(message.contains("custom token")),
+            other => panic!("expected invalid, got {}", poll_name(&other)),
+        }
+    }
+
+    fn poll_name(poll: &DevicePoll) -> &'static str {
+        match poll {
+            DevicePoll::Pending => "pending",
+            DevicePoll::Denied => "denied",
+            DevicePoll::Expired => "expired",
+            DevicePoll::ApprovedClerk(..) => "clerk",
+            DevicePoll::ApprovedFirebase(_) => "firebase",
+            DevicePoll::Invalid(_) => "invalid",
+        }
     }
 
     #[test]

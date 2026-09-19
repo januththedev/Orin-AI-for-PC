@@ -45,9 +45,21 @@ interface ChatsState {
 
 const CHATS_KEY = 'chats'
 let saveTimer: ReturnType<typeof setTimeout> | undefined
+/** Only conversations with at least one message are worth keeping — an
+ * untouched "new chat" must never be saved, locally or to the cloud. */
+export const withMessages = (conversations: Conversation[]) =>
+  conversations.filter((c) => c.messages.length > 0)
+/** Restarting with a stuck `pending` response would freeze the UI on a
+ * ghost "thinking" state — settle them on load. */
+export const settlePending = (conversations: Conversation[]) =>
+  conversations.map((c) => ({
+    ...c,
+    messages: c.messages.map((m) => (m.pending ? { ...m, pending: false } : m)),
+  }))
 const persist = (conversations: Conversation[]) => {
   clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => bridge.storeSet(CHATS_KEY, conversations).catch(() => {}), 350)
+  const kept = withMessages(conversations)
+  saveTimer = setTimeout(() => bridge.storeSet(CHATS_KEY, kept).catch(() => {}), 350)
   // Every mutation funnels through here — one hook covers cloud sync.
   void import('./cloudSync').then(({ scheduleCloudSync }) => scheduleCloudSync())
 }
@@ -71,7 +83,10 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
   hydrate: async () => {
     try {
       const saved = await bridge.storeGet<Conversation[]>(CHATS_KEY)
-      if (Array.isArray(saved) && saved.length) set({ conversations: saved, activeId: saved[0].id })
+      if (Array.isArray(saved) && saved.length) {
+        const kept = settlePending(withMessages(saved))
+        if (kept.length > 0) set({ conversations: kept, activeId: kept[0].id })
+      }
     } catch {
       // fresh install
     }
@@ -147,6 +162,8 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
           : c,
       ),
     }))
+    // The prompt itself is memory from here — don't wait for the first chunk.
+    persist(get().conversations)
 
     const modelId = useSettingsStore.getState().defaultModelId
     const history: AiMessage[] = chat.messages
@@ -201,6 +218,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
           : c,
       ),
     }))
+    persist(get().conversations)
   },
 }))
 

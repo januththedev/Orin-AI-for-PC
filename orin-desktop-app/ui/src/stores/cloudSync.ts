@@ -4,7 +4,7 @@
 // keeps local state authoritative.
 import { bridge } from '../bridge/client'
 import { useSettingsStore } from './settingsStore'
-import { useChatsStore } from './chatsStore'
+import { useChatsStore, withMessages, settlePending } from './chatsStore'
 
 function buildPayload() {
   const s = useSettingsStore.getState()
@@ -21,7 +21,7 @@ function buildPayload() {
         defaultMode: s.defaultMode,
         cloudSync: s.cloudSync,
       },
-      chats: useChatsStore.getState().conversations,
+      chats: withMessages(useChatsStore.getState().conversations),
     },
   }
 }
@@ -52,8 +52,11 @@ export async function pullAndMerge() {
   if (!remote?.blob) return
   if (remote.blob.settings) useSettingsStore.setState(remote.blob.settings)
   if (Array.isArray(remote.blob.chats) && remote.blob.chats.length > 0) {
-    useChatsStore.setState({
-      conversations: remote.blob.chats as ReturnType<typeof useChatsStore.getState>['conversations'],
-    })
+    const kept = settlePending(
+      withMessages(remote.blob.chats as ReturnType<typeof useChatsStore.getState>['conversations']),
+    )
+    if (kept.length > 0) {
+      useChatsStore.setState({ conversations: kept })
+    }
   }
 }

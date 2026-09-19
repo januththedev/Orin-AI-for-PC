@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
+import { FolderOpen } from 'lucide-react'
 import { bridge } from '../../bridge/client'
 import type { MessagePart, ModelInfo } from '../../bridge/types'
 import type { ChatMode } from '../../stores/chatsStore'
 import { useChatsStore } from '../../stores/chatsStore'
+import { useProjectsStore } from '../../stores/projectsStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useUiStore } from '../../stores/uiStore'
 import { OrinMark } from '../../components/OrinMark'
@@ -59,6 +61,20 @@ export default function HomePage() {
     setView('chat')
   }
 
+  const [openingFolder, setOpeningFolder] = useState(false)
+  const openFolder = async () => {
+    if (openingFolder) return
+    setOpeningFolder(true)
+    try {
+      const project = await useProjectsStore.getState().openFromFolder()
+      if (project) setView('ide')
+    } catch {
+      // dialog cancelled or folder unreadable — stay on home
+    } finally {
+      setOpeningFolder(false)
+    }
+  }
+
   return (
     <div className="home-page">
       <div className="home-stack">
@@ -82,6 +98,10 @@ export default function HomePage() {
           <span>
             <Kbd>Enter</Kbd> to send · <Kbd>Shift</Kbd> <Kbd>Enter</Kbd> for newline
           </span>
+          <span className="home-hint-dot" aria-hidden="true" />
+          <button type="button" className="home-folder-link" onClick={() => void openFolder()}>
+            <FolderOpen size={13} /> {openingFolder ? 'Opening…' : 'Open a folder'}
+          </button>
         </div>
       </div>
     </div>

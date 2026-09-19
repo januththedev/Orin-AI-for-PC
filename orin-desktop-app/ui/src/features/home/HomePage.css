@@ -73,3 +73,20 @@
     font-size: 30px;
   }
 }
+
+.home-folder-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.home-folder-link:hover {
+  text-decoration: underline;
+}
