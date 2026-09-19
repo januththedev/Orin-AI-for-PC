@@ -112,6 +112,9 @@ the toggle lives in Settings ▸ Account.
 | `telegram_set_token` | `token: string` | `null` (OS keyring; token never logged) |
 | `telegram_has_token` | — | `bool` |
 | `telegram_notify` | `chatId: string, text: string` | `null` |
+| `pc_link_start` | — | pairing `code` (10 min TTL; send `/link CODE` to the Orin Code bot) |
+| `pc_link_status` | — | `bool` (phone linked) |
+| `pc_link_unlink` | — | `null` |
 
 ### Connections (external services for the agent)
 | Command | Args | Returns |

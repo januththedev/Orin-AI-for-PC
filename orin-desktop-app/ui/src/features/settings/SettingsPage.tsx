@@ -308,6 +308,48 @@ function TelegramSection() {
   const [hasToken, setHasToken] = useState(false)
   const [chatId, setChatId] = useState('')
   const [status, setStatus] = useState('')
+  const [linkCode, setLinkCode] = useState<string | null>(null)
+  const [linked, setLinked] = useState(false)
+  const [linking, setLinking] = useState(false)
+
+  useEffect(() => {
+    bridge.telegramHasToken().then(setHasToken).catch(() => setHasToken(false))
+    bridge.pcLinkStatus().then(setLinked).catch(() => setLinked(false))
+  }, [])
+
+  // While a pairing code is on screen, poll until the phone claims it.
+  useEffect(() => {
+    if (!linkCode || linked) return
+    const timer = setInterval(() => {
+      bridge
+        .pcLinkStatus()
+        .then((isLinked) => {
+          if (isLinked) {
+            setLinked(true)
+            setLinkCode(null)
+          }
+        })
+        .catch(() => {})
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [linkCode, linked])
+
+  const startLink = async () => {
+    setLinking(true)
+    try {
+      setLinkCode(await bridge.pcLinkStart())
+    } catch (error) {
+      setStatus(String(error))
+    } finally {
+      setLinking(false)
+    }
+  }
+
+  const unlink = async () => {
+    await bridge.pcLinkUnlink().catch(() => {})
+    setLinked(false)
+    setLinkCode(null)
+  }
 
   useEffect(() => {
     bridge.telegramHasToken().then(setHasToken).catch(() => setHasToken(false))
@@ -378,11 +420,37 @@ function TelegramSection() {
           </button>
         </div>
       </div>
+      <div className="setting-row">
+        <div className="setting-copy">
+          <span className="setting-label">Phone approvals</span>
+          <span className="setting-hint">
+            {linked
+              ? 'Phone linked — agent approvals arrive on Telegram too.'
+              : 'Answer agent approvals from your phone via the Orin Code bot.'}
+          </span>
+        </div>
+        <div className="setting-control">
+          {linked ? (
+            <button className="connect-button" onClick={() => void unlink()}>
+              Unlink phone
+            </button>
+          ) : linkCode ? (
+            <span className="setting-hint">
+              Send <strong>/link {linkCode}</strong> to the Orin Code bot — waiting…
+            </span>
+          ) : (
+            <button className="connect-button" disabled={linking} onClick={() => void startLink()}>
+              {linking ? '…' : 'Link phone'}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
 
-const SHORTCUTS: Array<[string, string]> = [  ['New conversation', 'Ctrl + N'],
+const SHORTCUTS: Array<[string, string]> = [
+  ['New conversation', 'Ctrl + N'],
   ['Toggle sidebar', 'Ctrl + B'],
   ['Send message', 'Enter'],
   ['Newline in composer', 'Shift + Enter'],

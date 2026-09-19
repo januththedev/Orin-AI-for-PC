@@ -281,6 +281,12 @@ async fn run_loop(
         json!({ "model": task.model_id, "mode": task.mode, "instructions": task.instructions }),
     );
     let mut read_set: HashSet<String> = HashSet::new();
+    // Phone mirror: approvals also reach the linked Telegram (Orin Code bot)
+    // when the user paired it; silently local-only otherwise.
+    let mut mirror = {
+        let state = app.state::<super::AppState>();
+        super::telegram::mirror_for_run(state.inner()).await
+    };
 
     // Desktop control is a real-machine capability (GDI capture + SendInput).
     let desktop_enabled = cfg!(windows);
@@ -404,7 +410,7 @@ async fn run_loop(
 
             let (ok, summary, feedback, frame) = execute_tool(
                 &app, &emit, &root, &call, &approvals, &flag, &mut policy, &mut desktop,
-                &mut read_set,
+                &mut read_set, &mut mirror,
             )
             .await;
             if let Some((jpeg_b64, width, height)) = frame {
@@ -588,10 +594,11 @@ async fn execute_tool<E: Fn(serde_json::Value) + Send + Sync>(
     policy: &mut super::cu::policy::SessionPolicy,
     desktop: &mut Option<super::cu::AnyController>,
     read_set: &mut HashSet<String>,
+    mirror: &mut Option<super::telegram::PhoneMirror>,
 ) -> ToolOutcome {
     // --- Desktop control tools --------------------------------------------
     if is_desktop_tool(call.name.as_str()) {
-        return execute_desktop_tool(app, emit, call, approvals, flag, policy, desktop).await;
+        return execute_desktop_tool(app, emit, call, approvals, flag, policy, desktop, mirror).await;
     }
 
     // Workspace tools need an open folder.
@@ -606,7 +613,7 @@ async fn execute_tool<E: Fn(serde_json::Value) + Send + Sync>(
     };
     let (ok, summary, feedback) = {
         let state = app.state::<super::AppState>();
-        execute_workspace_tool(emit, &root, call, approvals, flag, read_set, state.inner()).await
+        execute_workspace_tool(emit, &root, call, approvals, flag, read_set, state.inner(), mirror).await
     };
     (ok, summary, feedback, None)
 }
@@ -619,6 +626,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
     flag: &Arc<AtomicBool>,
     read_set: &mut HashSet<String>,
     mcp_state: &super::AppState,
+    mirror: &mut Option<super::telegram::PhoneMirror>,
 ) -> (bool, String, String) {
     let root_path = std::path::Path::new(root);
 
@@ -728,16 +736,15 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 "approvalId": approval_id,
             }));
 
-            emit(json!({
-                "kind": "approval-request",
-                "approvalId": approval_id,
-                "tool": "str_replace",
-                "title": format!("Edit {}", file_name_of(&path)),
-                "detail": format!("Orin wants to apply a surgical edit to {path} (+{plus} −{minus})."),
-                "destructive": false,
-            }));
-
-            match wait_approval(approvals, &approval_id, flag).await {
+            let decision = request_approval(
+                emit, approvals, flag, mirror, &approval_id,
+                "str_replace",
+                format!("Edit {}", file_name_of(&path)),
+                format!("Orin wants to apply a surgical edit to {path} (+{plus} −{minus})."),
+                false,
+            )
+            .await;
+            match decision {
                 Some(true) => match tokio::fs::write(&full, &updated).await {
                     Ok(()) => (
                         true,
@@ -787,16 +794,15 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 "approvalId": approval_id,
             }));
 
-            emit(json!({
-                "kind": "approval-request",
-                "approvalId": approval_id,
-                "tool": "write_file",
-                "title": if existed { format!("Modify {}", file_name_of(&path)) } else { format!("Create {}", file_name_of(&path)) },
-                "detail": format!("Orin wants to {} {}.", if existed { "modify" } else { "create" }, path),
-                "destructive": false,
-            }));
-
-            match wait_approval(approvals, &approval_id, flag).await {
+            let decision = request_approval(
+                emit, approvals, flag, mirror, &approval_id,
+                "write_file",
+                if existed { format!("Modify {}", file_name_of(&path)) } else { format!("Create {}", file_name_of(&path)) },
+                format!("Orin wants to {} {}.", if existed { "modify" } else { "create" }, path),
+                false,
+            )
+            .await;
+            match decision {
                 Some(true) => {
                     if let Some(parent) = full.parent() {
                         if let Err(e) = tokio::fs::create_dir_all(parent).await {
@@ -845,15 +851,15 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 let connector_label =
                     super::connectors::find(&service).map(|c| c.label).unwrap_or("service");
                 let approval_id = uuid::Uuid::new_v4().to_string();
-                emit(json!({
-                    "kind": "approval-request",
-                    "approvalId": approval_id,
-                    "tool": "service_request",
-                    "title": format!("{connector_label} {} {}", method.to_uppercase(), path),
-                    "detail": format!("Orin wants to call {connector_label} ({} {}) — credentials stay server-side.", method.to_uppercase(), path),
-                    "destructive": true,
-                }));
-                match wait_approval(approvals, &approval_id, flag).await {
+                match request_approval(
+                    emit, approvals, flag, mirror, &approval_id,
+                    "service_request",
+                    format!("{connector_label} {} {}", method.to_uppercase(), path),
+                    format!("Orin wants to call {connector_label} ({} {}) — credentials stay server-side.", method.to_uppercase(), path),
+                    true,
+                )
+                .await
+                {
                     Some(true) => {}
                     Some(false) => {
                         return (
@@ -901,15 +907,15 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
             }
             // MCP tools act on the outside world (send mail, move files): always ask.
             let approval_id = uuid::Uuid::new_v4().to_string();
-            emit(json!({
-                "kind": "approval-request",
-                "approvalId": approval_id,
-                "tool": "mcp_call",
-                "title": format!("MCP {server} → {tool}"),
-                "detail": format!("Orin wants to call {tool} on {server}. Keys stay server-side."),
-                "destructive": true,
-            }));
-            match wait_approval(approvals, &approval_id, flag).await {
+            match request_approval(
+                emit, approvals, flag, mirror, &approval_id,
+                "mcp_call",
+                format!("MCP {server} → {tool}"),
+                format!("Orin wants to call {tool} on {server}. Keys stay server-side."),
+                true,
+            )
+            .await
+            {
                 Some(true) => match super::mcp::agent_call(mcp_state, &server, &tool, &arguments).await {
                     Ok((summary, feedback)) => (true, summary, feedback),
                     Err(feedback) => (false, "MCP call failed".into(), feedback),
@@ -925,16 +931,15 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                 return (false, "Missing command".into(), "ERROR: run_command needs a command.".into());
             }
             let approval_id = uuid::Uuid::new_v4().to_string();
-            emit(json!({
-                "kind": "approval-request",
-                "approvalId": approval_id,
-                "tool": "run_command",
-                "title": "Run shell command",
-                "detail": command.chars().take(300).collect::<String>(),
-                "destructive": true,
-            }));
-
-            match wait_approval(approvals, &approval_id, flag).await {
+            match request_approval(
+                emit, approvals, flag, mirror, &approval_id,
+                "run_command",
+                "Run shell command".into(),
+                command.chars().take(300).collect::<String>(),
+                true,
+            )
+            .await
+            {
                 Some(true) => {
                     let (program, args): (&str, Vec<&str>) = if cfg!(windows) {
                         ("cmd", vec!["/C", &command])
@@ -1006,6 +1011,7 @@ async fn execute_desktop_tool<E: Fn(serde_json::Value) + Send + Sync>(
     flag: &Arc<AtomicBool>,
     policy: &mut super::cu::policy::SessionPolicy,
     desktop: &mut Option<super::cu::AnyController>,
+    mirror: &mut Option<super::telegram::PhoneMirror>,
 ) -> ToolOutcome {
     #[cfg(not(windows))]
     {
@@ -1050,15 +1056,12 @@ async fn execute_desktop_tool<E: Fn(serde_json::Value) + Send + Sync>(
         if !action_kind.is_empty() {
             if let Decision::Ask(need) = policy.decide(&action_kind, &gate_target) {
                 let approval_id = uuid::Uuid::new_v4().to_string();
-                emit(json!({
-                    "kind": "approval-request",
-                    "approvalId": approval_id,
-                    "tool": call.name,
-                    "title": need.title,
-                    "detail": need.detail,
-                    "destructive": need.destructive,
-                }));
-                match wait_approval(approvals, &approval_id, flag).await {
+                match request_approval(
+                    emit, approvals, flag, mirror, &approval_id,
+                    &call.name, need.title, need.detail, need.destructive,
+                )
+                .await
+                {
                     Some(true) => policy.grant(&action_kind, &gate_target),
                     Some(false) => {
                         return (
@@ -1174,13 +1177,17 @@ fn capitalize(text: &str) -> String {
     }
 }
 
-/// Poll `state.approvals` until `approval_respond` lands a decision.
+/// Poll `state.approvals` until `approval_respond` lands a decision — or the
+/// linked phone answers first via the Orin Code bot. Either side wins; a
+/// remote decision is parked in the shared map like a local one.
 async fn wait_approval(
     approvals: &Arc<Mutex<HashMap<String, bool>>>,
     id: &str,
     flag: &Arc<AtomicBool>,
+    mirror: Option<&super::telegram::PhoneMirror>,
 ) -> Option<bool> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(APPROVAL_TIMEOUT_SECS);
+    let mut ticks = 0u32;
     loop {
         if let Ok(mut map) = approvals.lock() {
             if let Some(decision) = map.remove(id) {
@@ -1193,8 +1200,53 @@ async fn wait_approval(
         if tokio::time::Instant::now() >= deadline {
             return None;
         }
+        ticks += 1;
+        // Phone check every ~3 s; foreign decisions are parked for their waits.
+        if ticks % 20 == 0 {
+            if let Some(m) = mirror {
+                let batch = super::telegram::mirror_poll(m).await;
+                if let Some(approved) = super::telegram::mirror_match(&batch, id) {
+                    return Some(approved);
+                }
+                for (aid, approved) in batch {
+                    if let Ok(mut map) = approvals.lock() {
+                        map.insert(aid, approved);
+                    }
+                }
+            }
+        }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
+}
+
+/// One gate for every mutating tool: emit the approval-request event, mirror
+/// it to the linked phone (best-effort — a dead link disables mirroring for
+/// the rest of the run), then wait for either side to decide.
+async fn request_approval<E: Fn(serde_json::Value) + Send + Sync>(
+    emit: &E,
+    approvals: &Arc<Mutex<HashMap<String, bool>>>,
+    flag: &Arc<AtomicBool>,
+    mirror: &mut Option<super::telegram::PhoneMirror>,
+    id: &str,
+    tool: &str,
+    title: String,
+    detail: String,
+    destructive: bool,
+) -> Option<bool> {
+    emit(json!({
+        "kind": "approval-request",
+        "approvalId": id,
+        "tool": tool,
+        "title": title,
+        "detail": detail,
+        "destructive": destructive,
+    }));
+    if let Some(m) = mirror.as_ref() {
+        if !super::telegram::mirror_push(m, id, tool, &title, &detail).await {
+            *mirror = None;
+        }
+    }
+    wait_approval(approvals, id, flag, mirror.as_ref()).await
 }
 
 // ---------------------------------------------------------------------------

@@ -75,6 +75,8 @@ function mockInvoke<T>(command: string, args: Record<string, unknown>): Promise<
       return Promise.resolve(false as T)
     case 'telegram_has_token':
       return Promise.resolve(false as T)
+    case 'pc_link_status':
+      return Promise.resolve(false as T)
     case 'connector_has_cred':
       return Promise.resolve(false as T)
     case 'connector_test':
@@ -214,6 +216,11 @@ export const bridge = {
   telegramHasToken: (): Promise<boolean> => invoke('telegram_has_token'),
   telegramNotify: (chatId: string, text: string): Promise<void> =>
     invoke('telegram_notify', { chatId, text }),
+
+  // PC ↔ phone link (agent approvals answered from the Orin Code bot)
+  pcLinkStart: (): Promise<string> => invoke('pc_link_start'),
+  pcLinkStatus: (): Promise<boolean> => invoke('pc_link_status'),
+  pcLinkUnlink: () => invoke<void>('pc_link_unlink'),
 
   // connectors (service creds in OS keyring; validated live; agent-safe)
   connectorSetCred: (id: string, token: string) => invoke<void>('connector_set_cred', { id, token }),
