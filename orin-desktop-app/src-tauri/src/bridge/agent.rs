@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Deserialize)]
 pub struct AgentTask {
@@ -63,7 +63,9 @@ Available tools:\n\
 - str_replace(path, old_str, new_str) — replace ONE exact occurrence (read first; 0 or 2+ matches → retry with more context).\n\
 - write_file(path, content) — create/overwrite whole file (prefer str_replace for edits).\n\
 - run_command(command) — shell in workspace (120s limit, cmd.exe on Windows).\n\
-- service_request(service, method, path, body?) — connected services only (GET runs free; POST/PATCH ask approval). service is github | slack | notion; path is relative. Examples: {\"service\":\"github\",\"method\":\"POST\",\"path\":\"/repos/OWNER/REPO/issues\",\"body\":{\"title\":\"…\"}} · {\"service\":\"slack\",\"method\":\"POST\",\"path\":\"/chat.postMessage\",\"body\":{\"channel\":\"C…\",\"text\":\"…\"}} · {\"service\":\"notion\",\"method\":\"POST\",\"path\":\"/search\",\"body\":{\"query\":\"…\"}}.\n";
+- service_request(service, method, path, body?) — connected services only (GET runs free; POST/PATCH ask approval). service is github | slack | notion; path is relative. Examples: {\"service\":\"github\",\"method\":\"POST\",\"path\":\"/repos/OWNER/REPO/issues\",\"body\":{\"title\":\"…\"}} · {\"service\":\"slack\",\"method\":\"POST\",\"path\":\"/chat.postMessage\",\"body\":{\"channel\":\"C…\",\"text\":\"…\"}} · {\"service\":\"notion\",\"method\":\"POST\",\"path\":\"/search\",\"body\":{\"query\":\"…\"}}.\n\
+- mcp_list_tools(server) — list an MCP server's tools (free). External apps (Gmail, Drive, OneDrive…) live behind MCP servers: call this FIRST to learn exact tool names and arguments.\n\
+- mcp_call(server, tool, arguments) — call one MCP tool (always asks approval; keys are injected server-side, never ask for them). arguments is the JSON object the tool expects.\n";
 
 /// Desktop control (real Windows machine). Coordinates are normalized 0..1000
 /// across the whole screen, exactly like Computer Use. `screenshot` returns
@@ -451,6 +453,7 @@ async fn run_loop(
 
             let attr = match call.name.as_str() {
                 "read_file" | "write_file" | "str_replace" | "list_dir" => format!(" path=\"{}\"", target),
+                "mcp_list_tools" | "mcp_call" => format!(" server=\"{}\"", target),
                 _ => String::new(),
             };
             results.push_str(&format!(
@@ -485,7 +488,7 @@ fn is_supported_tool(name: &str, tools_enabled: bool, desktop_enabled: bool) -> 
     if !tools_enabled {
         return false;
     }
-    matches!(name, "read_file" | "list_dir" | "search_files" | "write_file" | "str_replace" | "run_command" | "service_request")
+    matches!(name, "read_file" | "list_dir" | "search_files" | "write_file" | "str_replace" | "run_command" | "service_request" | "mcp_list_tools" | "mcp_call")
 }
 
 fn is_desktop_tool(name: &str) -> bool {
@@ -525,6 +528,12 @@ fn tool_target(tool: &str, input: &serde_json::Value) -> String {
             let path = input_str(input, "path").unwrap_or_default();
             format!("{service} {path}").trim().to_string()
         }
+        "mcp_list_tools" => input_str(input, "server").unwrap_or_default(),
+        "mcp_call" => {
+            let server = input_str(input, "server").unwrap_or_default();
+            let tool = input_str(input, "tool").unwrap_or_default();
+            format!("{server} {tool}").trim().to_string()
+        }
         "type_text" => input_str(input, "text").unwrap_or_default(),
         "open_app" => input_str(input, "name").unwrap_or_default(),
         "focus_window" => input_str(input, "title").unwrap_or_default(),
@@ -542,6 +551,8 @@ fn label_for(tool: &str, target: &str) -> String {
         "search_files" => format!("Searching “{short}”"),
         "run_command" => format!("Running “{short}”"),
         "service_request" => format!("Service {short}"),
+        "mcp_list_tools" => format!("Listing {short} tools"),
+        "mcp_call" => format!("MCP {short}"),
         "screenshot" => "Looking at the screen".into(),
         "mouse_move" => format!("Moving mouse to ({short})"),
         "mouse_click" => format!("Clicking at ({short})"),
@@ -592,7 +603,10 @@ async fn execute_tool<E: Fn(serde_json::Value) + Send + Sync>(
             None,
         );
     };
-    let (ok, summary, feedback) = execute_workspace_tool(emit, &root, call, approvals, flag, read_set).await;
+    let (ok, summary, feedback) = {
+        let state = app.state::<super::AppState>();
+        execute_workspace_tool(emit, &root, call, approvals, flag, read_set, state.inner()).await
+    };
     (ok, summary, feedback, None)
 }
 
@@ -603,6 +617,7 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
     approvals: &Arc<Mutex<HashMap<String, bool>>>,
     flag: &Arc<AtomicBool>,
     read_set: &mut HashSet<String>,
+    mcp_state: &super::AppState,
 ) -> (bool, String, String) {
     let root_path = std::path::Path::new(root);
 
@@ -861,6 +876,45 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
             {
                 Ok((summary, feedback)) => (true, summary, feedback),
                 Err(feedback) => (false, "Service call failed".into(), feedback),
+            }
+        }
+
+        "mcp_list_tools" => {
+            let server = input_str(&call.input, "server").unwrap_or_default();
+            if server.trim().is_empty() {
+                return (false, "Missing server".into(), "ERROR: mcp_list_tools needs a server id (see Settings → Connections → MCP).".into());
+            }
+            match super::mcp::agent_list_tools(mcp_state, &server).await {
+                Ok((summary, feedback)) => (true, summary, feedback),
+                Err(feedback) => (false, "MCP list failed".into(), feedback),
+            }
+        }
+
+        "mcp_call" => {
+            let server = input_str(&call.input, "server").unwrap_or_default();
+            let tool = input_str(&call.input, "tool").unwrap_or_default();
+            let arguments =
+                call.input.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            if server.trim().is_empty() || tool.trim().is_empty() {
+                return (false, "Missing server/tool".into(), "ERROR: mcp_call needs server and tool — discover them with mcp_list_tools first.".into());
+            }
+            // MCP tools act on the outside world (send mail, move files): always ask.
+            let approval_id = uuid::Uuid::new_v4().to_string();
+            emit(json!({
+                "kind": "approval-request",
+                "approvalId": approval_id,
+                "tool": "mcp_call",
+                "title": format!("MCP {server} → {tool}"),
+                "detail": format!("Orin wants to call {tool} on {server}. Keys stay server-side."),
+                "destructive": true,
+            }));
+            match wait_approval(approvals, &approval_id, flag).await {
+                Some(true) => match super::mcp::agent_call(mcp_state, &server, &tool, &arguments).await {
+                    Ok((summary, feedback)) => (true, summary, feedback),
+                    Err(feedback) => (false, "MCP call failed".into(), feedback),
+                },
+                Some(false) => (false, "MCP call declined".into(), "SKIPPED: the user declined this MCP call.".into()),
+                None => (false, "Approval timed out".into(), "SKIPPED: approval for this MCP call timed out.".into()),
             }
         }
 
@@ -1556,5 +1610,10 @@ mod tests {
             "github /user"
         );
         assert_eq!(label_for("service_request", "github /user"), "Service github /user");
+        assert!(is_supported_tool("mcp_list_tools", true, false));
+        assert!(is_supported_tool("mcp_call", true, false));
+        assert!(!is_supported_tool("mcp_call", false, false));
+        assert_eq!(tool_target("mcp_call", &json!({ "server": "gmail", "tool": "send" })), "gmail send");
+        assert_eq!(label_for("mcp_call", "gmail send"), "MCP gmail send");
     }
 }

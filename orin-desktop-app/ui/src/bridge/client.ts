@@ -15,6 +15,7 @@ import type {
   FolderPick,
   ModelInfo,
   ProviderInfo,
+  McpServer,
   SearchHit,
 } from './types'
 
@@ -78,6 +79,10 @@ function mockInvoke<T>(command: string, args: Record<string, unknown>): Promise<
       return Promise.resolve(false as T)
     case 'connector_test':
       return Promise.reject(new Error('Connectors need the Rust core — run npm run app:dev') as unknown as T)
+    case 'mcp_servers':
+      return Promise.resolve([] as T)
+    case 'mcp_test':
+      return Promise.reject(new Error('MCP needs the Rust core — run npm run app:dev') as unknown as T)
     case 'store_get':
       return Promise.resolve((memoryStore.get(args.key as string) ?? null) as T)
     case 'store_set':
@@ -209,6 +214,13 @@ export const bridge = {
   connectorHasCred: (id: string): Promise<boolean> => invoke('connector_has_cred', { id }),
   connectorTest: (id: string): Promise<string> => invoke('connector_test', { id }),
   connectorRemove: (id: string) => invoke<void>('connector_remove', { id }),
+
+  // mcp servers (URL + key; agent discovers tools itself)
+  mcpServers: (): Promise<McpServer[]> => invoke('mcp_servers'),
+  mcpAddServer: (name: string, url: string): Promise<string> => invoke('mcp_add_server', { name, url }),
+  mcpRemoveServer: (id: string) => invoke<void>('mcp_remove_server', { id }),
+  mcpSetKey: (id: string, key: string) => invoke<void>('mcp_set_key', { id, key }),
+  mcpTest: (id: string): Promise<string> => invoke('mcp_test', { id }),
 
   // files
   pickFolder: (): Promise<FolderPick | null> => invoke('dialog_pick_folder'),

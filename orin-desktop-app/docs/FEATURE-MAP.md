@@ -107,8 +107,12 @@ owns network, files, terminals, keys). Contract: `docs/BRIDGE.md`.
 - Connections (Settings): GitHub / Slack / Notion credentials in OS
   keyring slots with live Test validation and status pills; the agent's
   `service_request` tool calls them with tokens injected server-side
-  (GET free, writes ask approval). Telegram bot token the same way plus
-  test-send. Google Drive stays honestly OAuth-gated.
+  (GET free, writes ask approval). MCP servers (Gmail/Drive/OneDrive via
+  hosted Streamable-HTTP endpoints — no Google Cloud/Azure setup) with
+  handshake + tool-count test; the agent self-discovers via
+  `mcp_list_tools` and calls via approval-gated `mcp_call`. Telegram bot
+  token the same way plus test-send. Google Drive stays honestly
+  OAuth-gated.
 
 ## 9. Branding — Orin Code + amber
 

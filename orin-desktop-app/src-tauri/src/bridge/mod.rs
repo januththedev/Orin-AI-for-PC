@@ -7,6 +7,7 @@ pub mod auth;
 pub mod connectors;
 pub mod cu;
 pub mod fs;
+pub mod mcp;
 pub mod models_fetch;
 pub mod presets;
 pub mod store;

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Github, MessageSquare, FileText, HardDrive } from 'lucide-react'
+import { Github, MessageSquare, FileText, HardDrive, Plug } from 'lucide-react'
 import { bridge } from '../../bridge/client'
+import type { McpServer } from '../../bridge/types'
 import './settings.css'
 
 interface ConnectorDef {
@@ -104,6 +105,7 @@ export default function ConnectorsPage() {
         injected server-side on each call — the agent uses your services
         without ever seeing your secrets.
       </p>
+      <McpSection />
       <div className="card-list" style={{ marginTop: 18 }}>
         {CONNECTORS.map((c) => (
           <div className="item-card" key={c.id}>
@@ -179,6 +181,119 @@ export default function ConnectorsPage() {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function McpSection() {
+  const [servers, setServers] = useState<McpServer[]>([])
+  const [name, setName] = useState('')
+  const [url, setUrl] = useState('')
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const [toolCounts, setToolCounts] = useState<Record<string, string>>({})
+
+  const refresh = async () => {
+    try {
+      setServers(await bridge.mcpServers())
+    } catch {
+      setServers([])
+    }
+  }
+
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  const add = async () => {
+    if (!name.trim() || !url.trim()) {
+      setNote('Give the server a name and URL first.')
+      return
+    }
+    setBusy(true)
+    setNote('')
+    try {
+      const id = await bridge.mcpAddServer(name.trim(), url.trim())
+      if (key.trim()) await bridge.mcpSetKey(id, key.trim())
+      const summary = await bridge.mcpTest(id)
+      setToolCounts((prev) => ({ ...prev, [id]: summary }))
+      setName('')
+      setUrl('')
+      setKey('')
+      setNote(`Connected — ${summary} ✓`)
+      await refresh()
+    } catch (error) {
+      setNote(String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (id: string) => {
+    await bridge.mcpRemoveServer(id).catch(() => {})
+    await refresh()
+  }
+
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div className="setting-row">
+        <div className="setting-copy">
+          <span className="setting-label">
+            <Plug size={13} style={{ verticalAlign: -2 }} /> MCP servers
+          </span>
+          <span className="setting-hint">
+            Gmail, Drive, OneDrive and friends via any Streamable-HTTP MCP server — e.g. your hosted
+            provider&apos;s endpoint. No Google Cloud / Azure app setup: the provider owns OAuth, you
+            paste a URL + key. The agent discovers tools itself.
+          </span>
+        </div>
+      </div>
+      {servers.map((s) => (
+        <div className="setting-row" key={s.id}>
+          <div className="setting-copy">
+            <span className="setting-label">{s.name}</span>
+            <span className="setting-hint">
+              {s.url} · {s.hasKey ? 'key stored' : 'no key'} · {toolCounts[s.id] ?? 'untested'}
+            </span>
+          </div>
+          <div className="setting-control">
+            <button className="connect-button" onClick={() => void remove(s.id)}>
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+      <div className="setting-row">
+        <div className="setting-copy">
+          <span className="setting-label">Add server</span>
+          <span className="setting-hint">{note || 'Name it (e.g. Gmail), paste the MCP endpoint URL and key.'}</span>
+        </div>
+        <div className="setting-control" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <input
+            className="text-input"
+            placeholder="Name…"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            className="text-input"
+            placeholder="https://…/mcp"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+          <input
+            className="text-input"
+            type="password"
+            placeholder="Key (optional)…"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+          />
+          <button className="connect-button" disabled={busy} onClick={() => void add()}>
+            {busy ? '…' : 'Save + test'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

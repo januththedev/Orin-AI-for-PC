@@ -124,6 +124,19 @@ Services: `github`, `slack`, `notion` (Google Drive needs OAuth — inert
 until cloud sync). The agent's `service_request` tool calls these with the
 token injected server-side; credentials never reach the model.
 
+### MCP servers (Gmail / Drive / OneDrive via hosted MCP, no OAuth setup)
+| Command | Args | Returns |
+|---|---|---|
+| `mcp_servers` | — | `[{ id, name, url, hasKey }]` |
+| `mcp_add_server` | `name: string, url: string` | `id` (URL must be http/https) |
+| `mcp_remove_server` | `id: string` | `null` (also drops the key) |
+| `mcp_set_key` | `id: string, key: string` | `null` (OS keyring, never logged) |
+| `mcp_test` | `id: string` | `"Name · N tools"` (handshake + tools/list) |
+
+The agent's `mcp_list_tools` (free) discovers capabilities and `mcp_call`
+(approval-gated) invokes them. Protocol: Streamable HTTP JSON-RPC with
+`2025-03-26` → `2024-11-05` fallback, SSE replies accepted, stateless v1.
+
 ## Events (core → renderer, via `listen`)
 
 | Event | Payload |

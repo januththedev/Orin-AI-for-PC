@@ -165,3 +165,11 @@ export interface ProviderInfo {
   docsUrl: string
   hasKey: boolean
 }
+
+// MCP server from mcp_servers (Settings → Connections)
+export interface McpServer {
+  id: string
+  name: string
+  url: string
+  hasKey: boolean
+}
