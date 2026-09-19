@@ -4,6 +4,7 @@ pub mod agent;
 pub mod ai;
 pub mod ai_impl;
 pub mod auth;
+pub mod connectors;
 pub mod cu;
 pub mod fs;
 pub mod models_fetch;

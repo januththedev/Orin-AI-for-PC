@@ -108,6 +108,21 @@ the toggle lives in Settings ▸ Account.
 | Command | Args | Returns |
 |---|---|---|
 | `app_info` | — | `{ version, os }` |
+| `telegram_set_token` | `token: string` | `null` (OS keyring; token never logged) |
+| `telegram_has_token` | — | `bool` |
+| `telegram_notify` | `chatId: string, text: string` | `null` |
+
+### Connections (external services for the agent)
+| Command | Args | Returns |
+|---|---|---|
+| `connector_set_cred` | `id: string, token: string` | `null` (OS keyring slot `connector/{id}`) |
+| `connector_has_cred` | `id: string` | `bool` |
+| `connector_test` | `id: string` | account display name (live probe) |
+| `connector_remove` | `id: string` | `null` |
+
+Services: `github`, `slack`, `notion` (Google Drive needs OAuth — inert
+until cloud sync). The agent's `service_request` tool calls these with the
+token injected server-side; credentials never reach the model.
 
 ## Events (core → renderer, via `listen`)
 

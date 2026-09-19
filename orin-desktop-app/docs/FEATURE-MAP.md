@@ -98,12 +98,17 @@ owns network, files, terminals, keys). Contract: `docs/BRIDGE.md`.
   target), `cu-frame` JPEG stream, permissions UI. Agent loop can drive it
   with screenshot-verify discipline.
 
-## 8. Projects / Artifacts / Home / Settings
+## 8. Projects / Artifacts / Home / Settings / Connections
 
 - Projects (open folder, per-project instructions + model), Artifacts
   gallery with preview + time-ago, Home dashboard, Customize, Skills,
-  Connectors pages, command palette, history search, cloud sync
+  command palette, history search, cloud sync
   (`sync_pull/push`, opt-out, 512 KB cap).
+- Connections (Settings): GitHub / Slack / Notion credentials in OS
+  keyring slots with live Test validation and status pills; the agent's
+  `service_request` tool calls them with tokens injected server-side
+  (GET free, writes ask approval). Telegram bot token the same way plus
+  test-send. Google Drive stays honestly OAuth-gated.
 
 ## 9. Branding — Orin Code + amber
 

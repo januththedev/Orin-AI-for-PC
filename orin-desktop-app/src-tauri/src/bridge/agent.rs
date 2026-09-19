@@ -44,21 +44,26 @@ const APPROVAL_TIMEOUT_SECS: u64 = 600; // 10 minutes
 
 const TOOL_PROTOCOL: &str = "\
 \n\n## Acting with tools\n\
-You may act by embedding tool calls directly in your reply, using blocks shaped exactly like this:\n\
+You are operating with tools inside the user's real workspace. Every tool call must move the request forward.\n\
+Call format — embed blocks EXACTLY like this (ONE JSON object per block; several blocks per reply run in order):\n\
 <tool_call>{\"name\":\"read_file\",\"input\":{\"path\":\"src/main.rs\"}}</tool_call>\n\
 Rules:\n\
-- Each block holds ONE JSON object with keys \"name\" and \"input\".\n\
-- You may emit several blocks per reply; they run in order and you receive one result each.\n\
-- Prefer read-only tools first. Only write files when the user asked for a change.\n\
-- write_file, str_replace, run_command and desktop-control actions require the user's approval and may be declined.\n\
-- When you are finished, or when no tool is needed, reply with plain text only (no tool_call blocks).\n\n\
+- Output contract: plain text PLUS tool_call blocks. Never prose inside a block; never invent results — wait for <tool_result>.\n\
+- Explore first: list_dir/read_file BEFORE editing. NEVER edit a file you have not read this run (str_replace enforces this).\n\
+- Smallest sufficient change: prefer str_replace (one exact block) over write_file (whole file).\n\
+- After any edit, re-read the edited region to confirm, and run the project's checks (tests/lint/build) via run_command when they exist.\n\
+- service_request reaches connected external services (github/slack/notion). Tokens are injected server-side — never ask the user for them.\n\
+- write_file, str_replace, run_command, service_request writes, and desktop-control actions ask the user and may be declined; a decline is FINAL — work around it or report back, never retry the same call.\n\
+- On ERROR: read the message, fix YOUR input (wrong path? bad JSON shape? missing read?), retry differently at most twice, then change approach or report. NEVER emit the identical call twice in a row.\n\
+- When finished, or when no tool is needed, reply with plain text only (no tool_call blocks).\n\n\
 Available tools:\n\
-- read_file(path) — read a text file. Paths are relative to the workspace root unless absolute.\n\
-- list_dir(path) — list a directory (use \".\" for the root).\n\
-- search_files(query) — case-insensitive text search across the workspace files.\n\
-- str_replace(path, old_str, new_str) — surgical edit: replace ONE exact occurrence of old_str with new_str. You MUST call read_file on the file first; if old_str matches 0 or 2+ places, retry with more surrounding context. Prefer this over write_file for existing files.\n\
-- write_file(path, content) — create or overwrite a text file with exactly the given content (prefer str_replace for edits).\n\
-- run_command(command) — run a shell command inside the workspace (120s limit).\n";
+- read_file(path) — read a text file (workspace-relative unless absolute).\n\
+- list_dir(path) — list a directory (\".\" = root).\n\
+- search_files(query) — case-insensitive text search.\n\
+- str_replace(path, old_str, new_str) — replace ONE exact occurrence (read first; 0 or 2+ matches → retry with more context).\n\
+- write_file(path, content) — create/overwrite whole file (prefer str_replace for edits).\n\
+- run_command(command) — shell in workspace (120s limit, cmd.exe on Windows).\n\
+- service_request(service, method, path, body?) — connected services only (GET runs free; POST/PATCH ask approval). service is github | slack | notion; path is relative. Examples: {\"service\":\"github\",\"method\":\"POST\",\"path\":\"/repos/OWNER/REPO/issues\",\"body\":{\"title\":\"…\"}} · {\"service\":\"slack\",\"method\":\"POST\",\"path\":\"/chat.postMessage\",\"body\":{\"channel\":\"C…\",\"text\":\"…\"}} · {\"service\":\"notion\",\"method\":\"POST\",\"path\":\"/search\",\"body\":{\"query\":\"…\"}}.\n";
 
 /// Desktop control (real Windows machine). Coordinates are normalized 0..1000
 /// across the whole screen, exactly like Computer Use. `screenshot` returns
@@ -73,10 +78,11 @@ const DESKTOP_TOOLS_PROTOCOL: &str = "\
 - open_app(name) — launch an application (e.g. \"notepad\", \"calc\", \"chrome\").\n\
 - focus_window(title) — bring a window whose title contains this text to the front.\n";
 
-fn build_system(task: &AgentTask, tools_enabled: bool, desktop_enabled: bool) -> String {
+fn build_system(task: &AgentTask, root: Option<&str>, desktop_enabled: bool) -> String {
+    let tools_enabled = root.is_some();
     let mut system = format!(
-        "You are Orin, an AI coding agent working inside the Orin Code desktop app. \
-         Be concise, practical and safe. Current mode: {}. ",
+        "You are Orin, an expert AI coding agent working inside the Orin Code desktop app. \
+         Be concise, practical and safe. Think step by step, act decisively, verify everything. Current mode: {}. ",
         task.mode
     );
     if let Some(extra) = task.project_instructions.as_deref() {
@@ -87,6 +93,11 @@ fn build_system(task: &AgentTask, tools_enabled: bool, desktop_enabled: bool) ->
     }
     if tools_enabled {
         system.push_str(TOOL_PROTOCOL);
+    }
+    if let Some(root) = root {
+        system.push_str(&format!(
+            "\n\nEnvironment: Windows 11, workspace root `{root}` (all relative paths resolve here), shell is cmd.exe. Connected external services, if any, are reachable via service_request — their credentials are handled for you.\n"
+        ));
     }
     if task.mode == "plan" {
         system.push_str(
@@ -273,9 +284,12 @@ async fn run_loop(
     let mut policy = super::cu::policy::SessionPolicy::new("windows");
     let mut desktop: Option<super::cu::AnyController> = None;
 
-    let system = Some(build_system(&task, root.is_some(), desktop_enabled));
+    let system = Some(build_system(&task, root.as_deref(), desktop_enabled));
     let mut plan_emitted = false;
     let mut step_index = 0usize;
+    // Loop guards: identical repeat = loop, 3 straight errors = stuck.
+    let mut last_call_sig: Option<String> = None;
+    let mut strikes = 0u8;
 
     for iteration in 0..MAX_ITERATIONS {
         if flag.load(Ordering::Relaxed) {
@@ -322,6 +336,20 @@ async fn run_loop(
         }
 
         let calls = parse_tool_calls(&reply);
+        // Repeat breaker: the identical call twice in a row is a loop, not
+        // progress — end the run with an explanation instead of burning it.
+        if calls.len() == 1 {
+            let sig = call_sig(&calls[0]);
+            if last_call_sig.as_deref() == Some(sig.as_str()) {
+                let summary = "Stopped: I repeated the same tool call twice — ending the run instead of looping. Check the error above and run again with corrected input.";
+                trajectory.log("done", json!({ "summary": summary }));
+                emit(json!({ "kind": "done", "summary": summary }));
+                return;
+            }
+            last_call_sig = Some(sig);
+        } else {
+            last_call_sig = None;
+        }
         if calls.is_empty() {
             let clean = strip_tool_blocks(&reply);
             if !clean.trim().is_empty() {
@@ -405,6 +433,19 @@ async fn run_loop(
                 "summary": summary,
             }));
             trajectory.log("tool_end", json!({ "tool": call.name, "ok": ok, "summary": summary }));
+            // Strike breaker: 3 consecutive errors means stuck — stop with
+            // the trail instead of spending the remaining iterations.
+            if ok {
+                strikes = 0;
+            } else {
+                strikes += 1;
+                if strikes >= 3 {
+                    let stop = format!("Stopping after 3 consecutive tool errors (last: {summary}). Fix the inputs above and run again.");
+                    trajectory.log("done", json!({ "summary": stop }));
+                    emit(json!({ "kind": "done", "summary": stop }));
+                    return;
+                }
+            }
             emit(json!({ "kind": "step", "index": step_index, "status": "done", "label": label_for(&call.name, &target) }));
             step_index += 1;
 
@@ -444,7 +485,7 @@ fn is_supported_tool(name: &str, tools_enabled: bool, desktop_enabled: bool) -> 
     if !tools_enabled {
         return false;
     }
-    matches!(name, "read_file" | "list_dir" | "search_files" | "write_file" | "str_replace" | "run_command")
+    matches!(name, "read_file" | "list_dir" | "search_files" | "write_file" | "str_replace" | "run_command" | "service_request")
 }
 
 fn is_desktop_tool(name: &str) -> bool {
@@ -479,6 +520,11 @@ fn tool_target(tool: &str, input: &serde_json::Value) -> String {
         "list_dir" => input_str(input, "path").unwrap_or_else(|| ".".into()),
         "search_files" => input_str(input, "query").unwrap_or_default(),
         "run_command" => input_str(input, "command").unwrap_or_default(),
+        "service_request" => {
+            let service = input_str(input, "service").unwrap_or_default();
+            let path = input_str(input, "path").unwrap_or_default();
+            format!("{service} {path}").trim().to_string()
+        }
         "type_text" => input_str(input, "text").unwrap_or_default(),
         "open_app" => input_str(input, "name").unwrap_or_default(),
         "focus_window" => input_str(input, "title").unwrap_or_default(),
@@ -495,6 +541,7 @@ fn label_for(tool: &str, target: &str) -> String {
         "list_dir" => format!("Listing {short}"),
         "search_files" => format!("Searching “{short}”"),
         "run_command" => format!("Running “{short}”"),
+        "service_request" => format!("Service {short}"),
         "screenshot" => "Looking at the screen".into(),
         "mouse_move" => format!("Moving mouse to ({short})"),
         "mouse_click" => format!("Clicking at ({short})"),
@@ -763,6 +810,57 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
                     "Approval timed out".into(),
                     format!("SKIPPED: approval for \"{path}\" timed out."),
                 ),
+            }
+        }
+
+        "service_request" => {
+            let service = input_str(&call.input, "service").unwrap_or_default();
+            let method = input_str(&call.input, "method").unwrap_or_else(|| "GET".into());
+            let path = input_str(&call.input, "path").unwrap_or_default();
+            if service.trim().is_empty() || path.trim().is_empty() {
+                return (
+                    false,
+                    "Missing service/path".into(),
+                    "ERROR: service_request needs service (github|slack|notion), method, and path — e.g. service \"github\", method \"GET\", path \"/user\".".into(),
+                );
+            }
+            // Writes leave the machine: same approval gate as file writes.
+            if method.to_uppercase() != "GET" {
+                let connector_label =
+                    super::connectors::find(&service).map(|c| c.label).unwrap_or("service");
+                let approval_id = uuid::Uuid::new_v4().to_string();
+                emit(json!({
+                    "kind": "approval-request",
+                    "approvalId": approval_id,
+                    "tool": "service_request",
+                    "title": format!("{connector_label} {} {}", method.to_uppercase(), path),
+                    "detail": format!("Orin wants to call {connector_label} ({} {}) — credentials stay server-side.", method.to_uppercase(), path),
+                    "destructive": true,
+                }));
+                match wait_approval(approvals, &approval_id, flag).await {
+                    Some(true) => {}
+                    Some(false) => {
+                        return (
+                            false,
+                            "Service call declined".into(),
+                            "SKIPPED: the user declined this service call.".into(),
+                        )
+                    }
+                    None => {
+                        return (
+                            false,
+                            "Approval timed out".into(),
+                            "SKIPPED: approval for this service call timed out.".into(),
+                        )
+                    }
+                }
+            }
+            let body = call.input.get("body").cloned();
+            match super::connectors::service_request(&service, &method.to_uppercase(), &path, body.as_ref())
+                .await
+            {
+                Ok((summary, feedback)) => (true, summary, feedback),
+                Err(feedback) => (false, "Service call failed".into(), feedback),
             }
         }
 
@@ -1047,6 +1145,12 @@ async fn wait_approval(
 // ---------------------------------------------------------------------------
 // Reply parsing
 // ---------------------------------------------------------------------------
+
+/// Identity of a tool call for the repeat breaker: name + exact input JSON.
+/// Two calls are "the same" only if every byte of input matches.
+fn call_sig(call: &ToolCall) -> String {
+    format!("{}:{}", call.name, call.input)
+}
 
 /// Extract every well-formed `<tool_call>{...}</tool_call>` block. Malformed
 /// JSON is skipped rather than failing the whole turn.
@@ -1426,5 +1530,31 @@ mod tests {
         let content = "first\r\nsecond\r\nthird\r\n";
         let updated = apply_str_replace(content, "second\n", "SECOND\n").unwrap();
         assert_eq!(updated, "first\r\nSECOND\r\nthird\r\n");
+    }
+
+    fn tool_call(name: &str, input: serde_json::Value) -> ToolCall {
+        ToolCall { name: name.into(), input }
+    }
+
+    #[test]
+    fn repeat_breaker_spots_identical_calls() {
+        let a = tool_call("read_file", json!({ "path": "x.rs" }));
+        let b = tool_call("read_file", json!({ "path": "x.rs" }));
+        let c = tool_call("read_file", json!({ "path": "y.rs" }));
+        let d = tool_call("list_dir", json!({ "path": "x.rs" }));
+        assert_eq!(call_sig(&a), call_sig(&b));
+        assert_ne!(call_sig(&a), call_sig(&c));
+        assert_ne!(call_sig(&a), call_sig(&d));
+    }
+
+    #[test]
+    fn service_tool_is_registered_and_labeled() {
+        assert!(is_supported_tool("service_request", true, false));
+        assert!(!is_supported_tool("service_request", false, false));
+        assert_eq!(
+            tool_target("service_request", &json!({ "service": "github", "path": "/user" })),
+            "github /user"
+        );
+        assert_eq!(label_for("service_request", "github /user"), "Service github /user");
     }
 }
