@@ -219,10 +219,29 @@ function AccountSection() {
   const deviceUserCode = useAuthStore((state) => state.deviceUserCode)
   const logout = useAuthStore((state) => state.logout)
   const [view, setView] = useState<'signin' | 'byok'>('signin')
+  const [backend, setBackend] = useState<string | null>(null)
+  const [testing, setTesting] = useState(false)
 
   useEffect(() => {
     useAuthStore.getState().hydrate()
   }, [])
+
+  const testBackend = async () => {
+    setTesting(true)
+    setBackend(null)
+    try {
+      const result = await bridge.backendStatus()
+      setBackend(
+        result.reachable
+          ? `Reachable ✓ ${result.latencyMs}ms (HTTP ${result.httpStatus})`
+          : 'Unreachable.',
+      )
+    } catch (error) {
+      setBackend(String(error))
+    } finally {
+      setTesting(false)
+    }
+  }
 
   if (status?.signedIn && status.session) {
     const who = status.session.email || status.session.phone
@@ -239,6 +258,11 @@ function AccountSection() {
             checked={useSettingsStore.getState().cloudSync}
             onChange={(value) => useSettingsStore.getState().update({ cloudSync: value })}
           />
+        </SettingRow>
+        <SettingRow label="Backend" hint={backend ?? 'Chat, sign-in, and sync all run through orinai.org.'}>
+          <button className="connect-button" disabled={testing} onClick={() => void testBackend()}>
+            {testing ? '…' : 'Test connection'}
+          </button>
         </SettingRow>
         <div className="account-actions">
           <button className="connect-button" onClick={() => void logout()}>
@@ -265,6 +289,11 @@ function AccountSection() {
   return (
     <div>
       <SignInForm busy={busy} deviceUserCode={deviceUserCode} />
+      <SettingRow label="Backend" hint={backend ?? 'Verify orinai.org is reachable before signing in.'}>
+        <button className="connect-button" disabled={testing} onClick={() => void testBackend()}>
+          {testing ? '…' : 'Test connection'}
+        </button>
+      </SettingRow>
       <div className="account-actions">
         <button className="account-link" onClick={() => setView('byok')}>
           Use your own API key instead

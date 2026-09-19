@@ -319,7 +319,9 @@ pub mod orin_cloud {
         // Tier the backend can route on: "orin/orin-pro" → "orin-pro", etc.
         // Unknown shapes default to pro so nothing silently downgrades.
         let tier = model_id.split('/').nth(1).filter(|s| !s.is_empty()).unwrap_or("orin-pro");
-        let response = reqwest::Client::new()
+        // Generous timeout: cloud answers route through owner key pools and
+        // may retry across providers server-side before responding.
+        let response = auth::backend_client(180)?
             .post(format!("{}/api/chat", auth::api_base()))
             .bearer_auth(token)
             .json(&chat_payload(messages, tier))

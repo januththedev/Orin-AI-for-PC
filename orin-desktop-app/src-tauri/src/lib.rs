@@ -33,6 +33,7 @@ pub fn run() {
             bridge::auth::open_external,
             bridge::auth::auth_status,
             bridge::auth::auth_logout,
+            bridge::auth::backend_status,
             bridge::sync::sync_pull,
             bridge::sync::sync_push,
             bridge::telegram::telegram_set_token,

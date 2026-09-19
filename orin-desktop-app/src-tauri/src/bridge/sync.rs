@@ -12,7 +12,7 @@ pub async fn sync_pull(state: State<'_, AppState>) -> Result<Value, String> {
     let token = auth::ensure_id_token(state.inner())
         .await
         .map_err(|_| "signed-out".to_string())?;
-    let response = reqwest::Client::new()
+    let response = auth::backend_client(30)?
         .get(format!("{}/api/desktop-sync", auth::api_base()))
         .bearer_auth(token)
         .send()
@@ -37,7 +37,7 @@ pub async fn sync_push(
     let token = auth::ensure_id_token(state.inner())
         .await
         .map_err(|_| "signed-out".to_string())?;
-    let response = reqwest::Client::new()
+    let response = auth::backend_client(30)?
         .put(format!("{}/api/desktop-sync", auth::api_base()))
         .bearer_auth(token)
         .json(&serde_json::json!({

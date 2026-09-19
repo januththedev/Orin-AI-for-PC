@@ -106,8 +106,20 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Shared HTTP client for orinai.org calls. Every backend call MUST go
+/// through here (or an explicit timeout) — a hung server must surface as an
+/// error, never a frozen app.
+pub fn backend_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// Auth calls are quick round-trips; the device poll loop depends on each
+/// attempt returning promptly.
 async fn post_json(url: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    let response = reqwest::Client::new()
+    let response = backend_client(25)?
         .post(url)
         .json(&body)
         .send()
@@ -392,6 +404,27 @@ pub fn auth_status(state: State<'_, AppState>) -> AuthStatus {
     match load_session(&state) {
         Some(session) => AuthStatus { signed_in: true, session: Some(session) },
         None => AuthStatus { signed_in: false, session: None },
+    }
+}
+
+/// Connection diagnostic for Settings → Account ("Test connection").
+/// Any HTTP answer — even 404 — means the server is alive; only a network
+/// failure counts as unreachable. Never requires sign-in.
+#[tauri::command]
+pub async fn backend_status() -> Result<serde_json::Value, String> {
+    let started = now_ms();
+    let outcome = backend_client(10)?
+        .get(format!("{}/api/health", api_base()))
+        .send()
+        .await;
+    let latency_ms = now_ms().saturating_sub(started);
+    match outcome {
+        Ok(response) => Ok(serde_json::json!({
+            "reachable": true,
+            "latencyMs": latency_ms,
+            "httpStatus": response.status().as_u16(),
+        })),
+        Err(_) => Err("Could not reach orinai.org. Check the connection — proxy or firewall rules are the usual cause.".into()),
     }
 }
 

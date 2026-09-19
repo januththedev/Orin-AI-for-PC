@@ -97,6 +97,8 @@ function mockInvoke<T>(command: string, args: Record<string, unknown>): Promise<
       return Promise.resolve(['virtual'] as T)
     case 'auth_status':
       return Promise.resolve({ signedIn: false, session: null } as T)
+    case 'backend_status':
+      return Promise.resolve({ reachable: true, latencyMs: 1, httpStatus: 200 } as T)
     case 'auth_logout':
       return Promise.resolve(undefined as T)
     case 'auth_device_start':
@@ -264,6 +266,8 @@ export const bridge = {
   openExternal: (url: string) => invoke<void>('open_external', { url }),
   authStatus: (): Promise<AuthStatus> => invoke('auth_status'),
   authLogout: () => invoke<void>('auth_logout'),
+  backendStatus: (): Promise<{ reachable: boolean; latencyMs: number; httpStatus: number }> =>
+    invoke('backend_status'),
   syncPull: <T = unknown>() =>
     invoke<{ blob: T | null; updatedAt: string | null }>('sync_pull'),
   syncPush: (blob: unknown, schemaVersion?: number) =>
