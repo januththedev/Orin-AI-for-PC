@@ -203,7 +203,7 @@ export default function IdePage() {
       </section>
 
       <aside className="ide-right">
-        <AiPanel root={root} />
+        <AiPanel root={root} project={project} />
       </aside>
     </div>
   )
