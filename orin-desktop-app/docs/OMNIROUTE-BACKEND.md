@@ -63,35 +63,22 @@ directly) — same key pool, same failover, same quota metering.
 Never log keys. Health state lives in memory (per server instance):
 `{ failures, cooledUntil }` per key.
 
-## 3. Tier → chain mapping (edit to taste)
+## 3. Tier → chain mapping (live auto-selection, not hardcoded)
 
-```ts
-const CHAINS: Record<string, Hop[]> = {
-  "orin-flash": [ // fast + cheap first
-    { provider: "groq", model: "llama-3.3-70b-versatile" },
-    { provider: "gemini", model: "gemini-2.0-flash" },
-    { provider: "openrouter", model: "meta-llama/llama-3.3-70b-instruct:free" },
-    { provider: "openai", model: "gpt-4.1-mini" },
-  ],
-  "orin-pro": [ // strongest first
-    { provider: "anthropic", model: "claude-sonnet-4-5" },
-    { provider: "openai", model: "gpt-4.1" },
-    { provider: "openrouter", model: "anthropic/claude-sonnet-4" },
-    { provider: "deepseek", model: "deepseek-chat" },
-  ],
-};
-```
+Reference implementation: `api/_lib/omni.js` in the website repo. Tiers are
+re-scored from OpenRouter's live catalog on every need (cached 1 h):
 
-Unknown `model` values fall back to the `orin-pro` chain (desktop also
-defaults to pro, so nothing silently downgrades). Hops whose pool is empty
-are skipped automatically.
+- `coding` → best free coding model (Orin Code surfaces: PC cloud-code,
+  Orin Code Telegram bot)
+- `thinking` → highest-intelligence free model (chatbot thinking toggle;
+  PC `orin-pro` maps here)
+- `balanced` → fastest smart free model (default chat; PC `orin-flash`)
+- `cheap` → tiny free model (titles, memory, JSON helpers)
 
-> OpenRouter-only setup (your case): keep the chains as-is but point every
-> hop at `openrouter` with different model ids — e.g. `orin-pro` →
-> `anthropic/claude-sonnet-4`, then `openai/gpt-4.1`, then
-> `deepseek/deepseek-chat`, then a `:free` model as last resort. All 6
-> `OPENROUTER_*` keys are tried per hop before moving on, so one key
-> hitting a limit never stops an answer.
+Explicit user-picked models win when allowlisted against the live catalog.
+`openrouter/free` is NEVER used (it answers with the most basic model even
+for demanding tasks) — a clean failure with a trail beats a dumb answer.
+Static fallback chains apply only when the catalog is unreachable.
 
 ## 4. Paste-ready router — `lib/omniroute.ts` (Next.js, no new deps)
 
