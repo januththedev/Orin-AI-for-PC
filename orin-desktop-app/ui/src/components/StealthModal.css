@@ -1,0 +1,109 @@
+.stealth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 7, 6, 0.72);
+  backdrop-filter: blur(6px);
+  animation: stealth-in 0.3s ease-out;
+}
+
+.stealth-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 430px;
+  margin: 0 20px;
+  padding: 34px 30px 26px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--accent-line);
+  background: var(--panel-raised);
+  box-shadow: 0 0 60px rgba(224, 138, 60, 0.25), var(--shadow-pop);
+  text-align: center;
+  animation: stealth-rise 0.35s ease-out;
+}
+
+.stealth-kicker {
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin: 0;
+}
+
+.stealth-title {
+  color: var(--text-bright);
+  font-size: var(--fs-xl);
+  margin: 0;
+}
+
+.stealth-id {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  margin: 0;
+  word-break: break-all;
+}
+
+.stealth-more {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.stealth-more button {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.stealth-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.stealth-note {
+  color: var(--muted-2);
+  font-size: var(--fs-2xs);
+  margin: 4px 0 0;
+}
+
+@keyframes stealth-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes stealth-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stealth-overlay,
+  .stealth-card {
+    animation: none;
+  }
+}

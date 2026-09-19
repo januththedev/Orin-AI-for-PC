@@ -128,3 +128,67 @@ pub async fn fetch_for_preset(state: &AppState, preset_id: &str) -> Result<Vec<M
     models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
 }
+
+/// Pure diff for stealth detection: ids present in `fetched` but absent from
+/// `seen`. Tested below.
+fn diff_new<'a>(fetched: &[&'a str], seen: &[String]) -> Vec<&'a str> {
+    fetched.iter().copied().filter(|id| !seen.iter().any(|s| s == id)).collect()
+}
+
+fn seen_key(preset_id: &str) -> String {
+    format!("models_seen/{preset_id}")
+}
+
+fn load_seen(state: &AppState, preset_id: &str) -> Vec<String> {
+    super::store::read_setting(state, &seen_key(preset_id))
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn has_seen(state: &AppState, preset_id: &str) -> bool {
+    super::store::read_setting(state, &seen_key(preset_id)).is_some()
+}
+
+/// Stealth check: fetch live, return models never seen before (free ones —
+/// `:free` ids), then persist the full set as the new baseline. First run
+/// per preset only establishes the baseline and returns [] (no Day-1 spam).
+pub async fn check_new(state: &AppState, preset_id: &str) -> Result<Vec<super::ai::ModelInfo>, String> {
+    let models = fetch_for_preset(state, preset_id).await?;
+    let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+    if !has_seen(state, preset_id) {
+        save_seen(state, preset_id, &ids)?;
+        return Ok(vec![]);
+    }
+    let seen = load_seen(state, preset_id);
+    let fresh: Vec<&str> = diff_new(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &seen);
+    save_seen(state, preset_id, &ids)?;
+    Ok(models
+        .into_iter()
+        .filter(|m| fresh.contains(&m.id.as_str()) && m.id.to_lowercase().contains("free"))
+        .collect())
+}
+
+fn save_seen(state: &AppState, preset_id: &str, ids: &[String]) -> Result<(), String> {
+    let raw = serde_json::to_string(ids).map_err(|e| e.to_string())?;
+    super::store::write_setting(state, &seen_key(preset_id), &raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diff_new_reports_only_unseen() {
+        let fetched = vec!["a", "b", "c"];
+        let seen = vec!["a".to_string(), "c".to_string()];
+        assert_eq!(diff_new(&fetched, &seen), vec!["b"]);
+        assert!(diff_new(&fetched, &[]).len() == 3);
+        let all_seen = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert!(diff_new(&fetched, &all_seen).is_empty());
+    }
+
+    #[test]
+    fn seen_key_is_namespaced() {
+        assert_eq!(seen_key("openrouter"), "models_seen/openrouter");
+    }
+}

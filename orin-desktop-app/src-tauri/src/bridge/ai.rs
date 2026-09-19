@@ -139,6 +139,16 @@ pub async fn models_fetch(
     super::models_fetch::fetch_for_preset(&state, &preset_id).await
 }
 
+/// Stealth check for the full-screen announcement: new free models since the
+/// last check (baseline established silently on first run per preset).
+#[tauri::command]
+pub async fn models_check_new(
+    preset_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ModelInfo>, String> {
+    super::models_fetch::check_new(&state, &preset_id).await
+}
+
 #[tauri::command]
 pub fn provider_set_key(provider: String, key: String) -> Result<(), String> {
     keyring_entry(&presets::keyring_user(&provider))?.set_password(&key).map_err(|e| e.to_string())

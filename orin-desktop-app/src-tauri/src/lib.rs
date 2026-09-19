@@ -23,6 +23,7 @@ pub fn run() {
             bridge::ai::ai_abort,
             bridge::ai::models_list,
             bridge::ai::models_fetch,
+            bridge::ai::models_check_new,
             bridge::ai::providers_list,
             bridge::ai::provider_set_key,
             bridge::ai::provider_has_key,

@@ -136,6 +136,8 @@ function mockInvoke<T>(command: string, args: Record<string, unknown>): Promise<
       ] as T)
     case 'models_fetch':
       return Promise.resolve([] as T)
+    case 'models_check_new':
+      return Promise.resolve([] as T)
     case 'dialog_pick_folder':
       return Promise.resolve(null as T)
     case 'ai_send': {
@@ -202,6 +204,8 @@ export const bridge = {
   providersList: (): Promise<ProviderInfo[]> => invoke('providers_list'),
   modelsFetch: (presetId: string): Promise<ModelInfo[]> =>
     invoke('models_fetch', { presetId }),
+  modelsCheckNew: (presetId: string): Promise<ModelInfo[]> =>
+    invoke('models_check_new', { presetId }),
   providerSetKey: (provider: string, key: string) => invoke<void>('provider_set_key', { provider, key }),
   providerHasKey: (provider: string): Promise<boolean> => invoke('provider_has_key', { provider }),
 
