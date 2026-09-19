@@ -26,6 +26,17 @@ interface DiffCard {
   resolved?: 'accepted' | 'rejected'
 }
 
+interface ApprovalCard {
+  id: string
+  tool: string
+  title: string
+  detail: string
+  destructive: boolean
+  resolved?: 'accepted' | 'rejected'
+}
+
+type RunMode = 'plan' | 'agent'
+
 export function AiPanel({ root }: { root: string | null }) {
   const modelId = useSettingsStore((state) => state.defaultModelId)
   const [instructions, setInstructions] = useState('')
@@ -34,6 +45,8 @@ export function AiPanel({ root }: { root: string | null }) {
   const [statuses, setStatuses] = useState<string[]>([])
   const [tools, setTools] = useState<ToolCard[]>([])
   const [diffs, setDiffs] = useState<DiffCard[]>([])
+  const [approvals, setApprovals] = useState<ApprovalCard[]>([])
+  const [mode, setMode] = useState<RunMode>('agent')
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   const runIdRef = useRef<string | null>(null)
   const offRef = useRef<(() => void) | null>(null)
@@ -43,6 +56,7 @@ export function AiPanel({ root }: { root: string | null }) {
     setStatuses([])
     setTools([])
     setDiffs([])
+    setApprovals([])
     setResult(null)
   }
 
@@ -58,7 +72,7 @@ export function AiPanel({ root }: { root: string | null }) {
     try {
       const runId = await bridge.agentRun({
         modelId,
-        mode: 'agent',
+        mode,
         instructions: instructions.trim(),
         history: [],
         workspaceRoot: root ?? undefined,
@@ -105,6 +119,24 @@ export function AiPanel({ root }: { root: string | null }) {
           },
         ])
         break
+      case 'approval-request':
+        // Diff cards that carry an approval id answer it themselves (see the
+        // render filter below); standalone cards cover run_command, desktop
+        // tools, and anything else without a diff.
+        setApprovals((prev) => {
+          if (prev.some((card) => card.id === event.approvalId)) return prev
+          return [
+            ...prev,
+            {
+              id: event.approvalId,
+              tool: event.tool,
+              title: event.title,
+              detail: event.detail,
+              destructive: event.destructive,
+            },
+          ]
+        })
+        break
       case 'done':
         setResult({ ok: true, text: event.summary })
         setRunning(false)
@@ -119,11 +151,28 @@ export function AiPanel({ root }: { root: string | null }) {
   }
 
   const respond = async (diff: DiffCard, approved: boolean) => {
-    if (diff.approvalId) await bridge.approvalRespond(diff.approvalId, approved).catch(() => {})
+    if (diff.approvalId) await answerApproval(diff.approvalId, approved)
+    else {
+      setDiffs((prev) =>
+        prev.map((card) => (card.id === diff.id ? { ...card, resolved: approved ? 'accepted' : 'rejected' } : card)),
+      )
+    }
+  }
+
+  const answerApproval = async (approvalId: string, approved: boolean) => {
+    await bridge.approvalRespond(approvalId, approved).catch(() => {})
+    const resolved = approved ? 'accepted' : 'rejected'
+    setApprovals((prev) => prev.map((card) => (card.id === approvalId ? { ...card, resolved } : card)))
     setDiffs((prev) =>
-      prev.map((card) => (card.id === diff.id ? { ...card, resolved: approved ? 'accepted' : 'rejected' } : card)),
+      prev.map((card) => (card.approvalId === approvalId ? { ...card, resolved } : card)),
     )
   }
+
+  // Approvals already owned by a diff card are answered there — show only
+  // standalone ones (commands, desktop control) as their own cards.
+  const standaloneApprovals = approvals.filter(
+    (card) => !diffs.some((diff) => diff.approvalId === card.id),
+  )
 
   return (
     <div className="ide-ai">
@@ -132,9 +181,30 @@ export function AiPanel({ root }: { root: string | null }) {
         <span className="ide-ai-model">{modelId.split('/').pop()}</span>
       </div>
 
+      <div className="ide-ai-modes" role="radiogroup" aria-label="Agent mode">
+        {(['plan', 'agent'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={mode === m}
+            className={`ide-ai-mode ${mode === m ? 'active' : ''}`}
+            onClick={() => setMode(m)}
+            disabled={running}
+            title={m === 'plan' ? 'Investigate only — read-only, ends with a step-by-step plan' : 'Full access — read, edit with approval, run commands with approval'}
+          >
+            {m === 'plan' ? 'Plan' : 'Agent · full access'}
+          </button>
+        ))}
+      </div>
+
       <textarea
         className="ide-ai-input"
-        placeholder="Describe a coding task — Orin will inspect the project, propose diffs, and run checks…"
+        placeholder={
+          mode === 'plan'
+            ? 'Describe what to figure out — Orin will investigate and return a plan…'
+            : 'Describe a coding task — Orin will inspect the project, propose diffs, and run checks…'
+        }
         value={instructions}
         onChange={(event) => setInstructions(event.target.value)}
         disabled={running}
@@ -151,10 +221,11 @@ export function AiPanel({ root }: { root: string | null }) {
       )}
 
       <div className="ide-ai-feed">
-        {!plan && statuses.length === 0 && tools.length === 0 && diffs.length === 0 && !result && (
+        {!plan && statuses.length === 0 && tools.length === 0 && diffs.length === 0 && standaloneApprovals.length === 0 && !result && (
           <p className="ide-ai-empty">
-            The agent's plan, tool calls, and proposed file changes appear here. File writes and commands
-            always ask before running.
+            {mode === 'plan'
+              ? 'Plan mode investigates read-only and returns a step-by-step plan — nothing will be changed.'
+              : 'The agent\u2019s plan, tool calls, and proposed file changes appear here. File writes and commands always ask before running.'}
           </p>
         )}
 
@@ -191,6 +262,30 @@ export function AiPanel({ root }: { root: string | null }) {
 
         {diffs.map((diff) => (
           <DiffView key={diff.id} diff={diff} onRespond={respond} />
+        ))}
+
+        {standaloneApprovals.map((card) => (
+          <div key={card.id} className={`ide-approval ${card.destructive ? 'destructive' : ''}`}>
+            <div className="ide-approval-head">
+              <strong>{card.title}</strong>
+              <span className="ide-approval-tool">{card.tool}</span>
+            </div>
+            <p className="ide-approval-detail">{card.detail}</p>
+            {card.resolved ? (
+              <span className={`ide-diff-resolved ${card.resolved}`}>
+                {card.resolved === 'accepted' ? 'Approved ✓' : 'Denied'}
+              </span>
+            ) : (
+              <div className="ide-diff-actions">
+                <button className="ide-diff-reject" onClick={() => answerApproval(card.id, false)}>
+                  Deny
+                </button>
+                <button className="ide-diff-accept" onClick={() => answerApproval(card.id, true)}>
+                  Approve
+                </button>
+              </div>
+            )}
+          </div>
         ))}
 
         {result && <div className={`ide-ai-result ${result.ok ? 'ok' : 'fail'}`}>{result.text}</div>}

@@ -69,10 +69,28 @@ const MODES: Array<{ id: ChatMode; label: string }> = [
   { id: 'agent', label: 'Agent' },
 ]
 
-const PROVIDER_LABELS: Record<ModelInfo['provider'], string> = {
+const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
+  openai: 'OpenAI',
   openai_compat: 'OpenAI-compatible',
+  openrouter: 'OpenRouter',
+  deepseek: 'DeepSeek',
+  groq: 'Groq',
+  gemini: 'Google Gemini',
+  mistral: 'Mistral',
+  xai: 'xAI (Grok)',
+  cohere: 'Cohere',
+  perplexity: 'Perplexity',
+  together: 'Together',
+  fireworks: 'Fireworks',
+  ollama: 'Ollama (local)',
+  lmstudio: 'LM Studio (local)',
+  vllm: 'vLLM (local)',
+  litellm: 'LiteLLM proxy',
+  custom: 'Custom',
   mock: 'Offline',
+  orin_cloud: 'Orin Cloud',
+  orin: 'Orin Cloud',
 }
 
 const TIER_DOT: Record<ModelInfo['tier'], string> = {
@@ -512,7 +530,7 @@ export function Composer({
               ) : (
                 groupModels(models).map(([provider, providerModels]) => (
                   <div key={provider}>
-                    <DropdownSectionLabel>{PROVIDER_LABELS[provider]}</DropdownSectionLabel>
+                    <DropdownSectionLabel>{PROVIDER_LABELS[provider] ?? provider}</DropdownSectionLabel>
                     {providerModels.map((m) => (
                       <DropdownItem
                         key={m.id}

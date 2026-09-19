@@ -648,3 +648,111 @@
   background: var(--danger-soft);
   color: var(--danger);
 }
+
+/* ------------------------------------------------- plan/agent switch */
+.ide-ai-modes {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.ide-ai-mode {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--input);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--speed-fast) ease-out, color var(--speed-fast) ease-out;
+}
+
+.ide-ai-mode.active {
+  border-color: var(--accent-line);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ide-ai-mode:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ------------------------------------------------- approval cards */
+.ide-approval {
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  padding: 10px 12px;
+  margin-top: 8px;
+  animation: card-in 0.22s ease-out;
+}
+
+.ide-approval.destructive {
+  border-color: rgba(217, 107, 87, 0.5);
+  background: var(--danger-soft);
+}
+
+.ide-approval-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ide-approval-tool {
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.ide-approval-detail {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  margin: 6px 0 10px;
+  word-break: break-word;
+}
+
+.ide-tool-card,
+.ide-diff,
+.ide-plan-step {
+  animation: card-in 0.22s ease-out;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Running stop button pulses while the agent works. */
+.ide-ai-stop {
+  animation: stop-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes stop-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 138, 60, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(224, 138, 60, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ide-tool-card,
+  .ide-diff,
+  .ide-plan-step,
+  .ide-approval,
+  .ide-ai-stop {
+    animation: none;
+  }
+}

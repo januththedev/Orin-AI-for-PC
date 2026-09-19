@@ -355,3 +355,45 @@
     padding: 9px 12px;
   }
 }
+
+/* ------------------------------------------------- entrance + streaming */
+.message-row {
+  animation: msg-in 0.25s ease-out;
+}
+
+@keyframes msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Blinking amber caret while the answer streams in. */
+.markdown.streaming::after {
+  content: '▍';
+  color: var(--accent);
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-row,
+  .thinking-dots span,
+  .thinking-label,
+  .markdown.streaming::after {
+    animation: none;
+  }
+}

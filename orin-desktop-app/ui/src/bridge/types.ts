@@ -61,7 +61,7 @@ export interface ToolDef {
 
 export interface AgentTask {
   modelId: string
-  mode: 'chat' | 'cowork' | 'agent'
+  mode: 'chat' | 'cowork' | 'agent' | 'plan'
   instructions: string
   history: AiMessage[]
   workspaceRoot?: string

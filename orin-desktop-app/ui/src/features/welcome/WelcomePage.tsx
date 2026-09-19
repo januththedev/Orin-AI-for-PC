@@ -83,9 +83,7 @@ export default function WelcomePage({ onEnterApp }: { onEnterApp: () => void }) 
                 <small>Anthropic, OpenRouter, Groq, Ollama… stored safely on this PC</small>
               </span>
             </button>
-            <button className="welcome-offline" onClick={() => void dismiss().then(onEnterApp)}>
-              Explore offline instead
-            </button>
+            <p className="welcome-gate-note">Sign in or connect a key to enter — there is no offline mode.</p>
           </div>
         )}
 

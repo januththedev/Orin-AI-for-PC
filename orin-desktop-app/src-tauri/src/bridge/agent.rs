@@ -651,18 +651,20 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
             };
 
             // Same review flow as write_file: the diff reaches the UI before
-            // approval so the user sees exactly what will change.
+            // approval so the user sees exactly what will change. The diff
+            // carries the approval id so the UI can answer it in place.
             let diff = simple_line_diff(&content, &updated);
             let (plus, minus) = count_diff_lines(&diff);
+            let approval_id = uuid::Uuid::new_v4().to_string();
             emit(json!({
                 "kind": "diff",
                 "path": path,
                 "change": "modified",
                 "diffUnified": diff,
                 "changeSummary": format!("+{plus} −{minus} lines"),
+                "approvalId": approval_id,
             }));
 
-            let approval_id = uuid::Uuid::new_v4().to_string();
             emit(json!({
                 "kind": "approval-request",
                 "approvalId": approval_id,
@@ -708,18 +710,20 @@ async fn execute_workspace_tool<E: Fn(serde_json::Value) + Send + Sync>(
             let old = tokio::fs::read_to_string(&full).await.unwrap_or_default();
 
             // The diff goes to the UI before approval so the user sees exactly
-            // what will change while deciding.
+            // what will change while deciding. It carries the approval id so
+            // the UI answers it on the diff card itself.
             let diff = simple_line_diff(&old, &content);
             let (plus, minus) = count_diff_lines(&diff);
+            let approval_id = uuid::Uuid::new_v4().to_string();
             emit(json!({
                 "kind": "diff",
                 "path": path,
                 "change": if existed { "modified" } else { "added" },
                 "diffUnified": diff,
                 "changeSummary": format!("+{plus} −{minus} lines"),
+                "approvalId": approval_id,
             }));
 
-            let approval_id = uuid::Uuid::new_v4().to_string();
             emit(json!({
                 "kind": "approval-request",
                 "approvalId": approval_id,

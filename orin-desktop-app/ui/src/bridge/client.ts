@@ -72,6 +72,8 @@ function mockInvoke<T>(command: string, args: Record<string, unknown>): Promise<
       return Promise.resolve(mockModels as T)
     case 'provider_has_key':
       return Promise.resolve(false as T)
+    case 'telegram_has_token':
+      return Promise.resolve(false as T)
     case 'store_get':
       return Promise.resolve((memoryStore.get(args.key as string) ?? null) as T)
     case 'store_set':
@@ -191,6 +193,12 @@ export const bridge = {
     invoke('models_fetch', { presetId }),
   providerSetKey: (provider: string, key: string) => invoke<void>('provider_set_key', { provider, key }),
   providerHasKey: (provider: string): Promise<boolean> => invoke('provider_has_key', { provider }),
+
+  // telegram (bot token lives in env/keyring only — never in code)
+  telegramSetToken: (token: string) => invoke<void>('telegram_set_token', { token }),
+  telegramHasToken: (): Promise<boolean> => invoke('telegram_has_token'),
+  telegramNotify: (chatId: string, text: string): Promise<void> =>
+    invoke('telegram_notify', { chatId, text }),
 
   // files
   pickFolder: (): Promise<FolderPick | null> => invoke('dialog_pick_folder'),

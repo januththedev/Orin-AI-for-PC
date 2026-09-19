@@ -239,3 +239,10 @@
 .welcome-footnote a:hover {
   text-decoration: underline;
 }
+
+.welcome-gate-note {
+  color: var(--muted-2);
+  font-size: var(--fs-xs);
+  text-align: center;
+  margin: 4px 0 0;
+}

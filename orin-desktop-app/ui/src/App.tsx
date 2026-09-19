@@ -18,8 +18,8 @@ export default function App() {
       // Auth is not part of hydrateAll — the welcome gate needs it first.
       await useAuthStore.getState().hydrate()
       const signedIn = useAuthStore.getState().status?.signedIn ?? false
-      // Any stored provider key counts — the preset catalog (P2 router) can
-      // grow, so ask the core which providers take keys instead of hardcoding.
+      // Forced gate: no offline bypass. A stored key for ANY provider or a
+      // live session is required — otherwise the user stays on welcome.
       // `openai_compat` is the legacy keyring slot, kept for older installs.
       let hasKey = false
       try {
@@ -35,12 +35,8 @@ export default function App() {
       } catch {
         hasKey = false
       }
-      const dismissed = await bridge
-        .storeGet<number>('onboarding.dismissed')
-        .then((value) => value === 1)
-        .catch(() => false)
       if (!alive) return
-      setPhase(!signedIn && !hasKey && !dismissed ? 'welcome' : 'app')
+      setPhase(!signedIn && !hasKey ? 'welcome' : 'app')
     })().catch(() => {
       if (alive) setPhase('app') // never trap the user behind a boot failure
     })

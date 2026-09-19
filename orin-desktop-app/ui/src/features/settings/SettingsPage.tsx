@@ -274,8 +274,86 @@ function AccountSection() {
   )
 }
 
-const SHORTCUTS: Array<[string, string]> = [
-  ['New conversation', 'Ctrl + N'],
+function TelegramSection() {
+  const [token, setToken] = useState('')
+  const [hasToken, setHasToken] = useState(false)
+  const [chatId, setChatId] = useState('')
+  const [status, setStatus] = useState('')
+
+  useEffect(() => {
+    bridge.telegramHasToken().then(setHasToken).catch(() => setHasToken(false))
+  }, [])
+
+  const save = async () => {
+    if (!token.trim()) return
+    try {
+      await bridge.telegramSetToken(token.trim())
+      setHasToken(true)
+      setToken('')
+      setStatus('Saved to the OS credential manager ✓')
+    } catch (error) {
+      setStatus(String(error))
+    }
+  }
+
+  const test = async () => {
+    if (!chatId.trim()) {
+      setStatus('Enter your chat id first.')
+      return
+    }
+    try {
+      await bridge.telegramNotify(chatId.trim(), 'Orin Code test — notifications are wired up. ✓')
+      setStatus('Test message sent ✓')
+    } catch (error) {
+      setStatus(String(error))
+    }
+  }
+
+  return (
+    <div>
+      <SettingRow label="Bot token" hint={hasToken ? 'Token stored · never shown' : 'From @BotFather — stored only in the OS credential manager'}>
+        <span className="setting-hint">{status}</span>
+      </SettingRow>
+      <div className="setting-row">
+        <div className="setting-copy">
+          <span className="setting-label">Token</span>
+          <span className="setting-hint">Prefer the ORIN_TELEGRAM_BOT_TOKEN env var on shared machines.</span>
+        </div>
+        <div className="setting-control">
+          <input
+            className="text-input"
+            type="password"
+            placeholder={hasToken ? 'Replace token…' : 'Paste bot token…'}
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+          />
+          <button className="connect-button" onClick={() => void save()}>
+            Save
+          </button>
+        </div>
+      </div>
+      <div className="setting-row">
+        <div className="setting-copy">
+          <span className="setting-label">Test</span>
+          <span className="setting-hint">Your numeric chat id (message @userinfobot to find it).</span>
+        </div>
+        <div className="setting-control">
+          <input
+            className="text-input"
+            placeholder="Chat id…"
+            value={chatId}
+            onChange={(event) => setChatId(event.target.value)}
+          />
+          <button className="connect-button" onClick={() => void test()}>
+            Send test
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const SHORTCUTS: Array<[string, string]> = [  ['New conversation', 'Ctrl + N'],
   ['Toggle sidebar', 'Ctrl + B'],
   ['Send message', 'Enter'],
   ['Newline in composer', 'Shift + Enter'],
@@ -315,6 +393,11 @@ export default function SettingsPage() {
       id: 'models',
       label: 'Models',
       content: <ModelsSection />,
+    },
+    {
+      id: 'notifications',
+      label: 'Notifications',
+      content: <TelegramSection />,
     },
     {
       id: 'behavior',

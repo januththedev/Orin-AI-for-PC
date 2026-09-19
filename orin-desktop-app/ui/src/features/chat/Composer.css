@@ -369,3 +369,42 @@
     padding: 4px 8px;
   }
 }
+
+/* ------------------------------------------------------- send feedback */
+.composer:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 0 24px rgba(224, 138, 60, 0.12);
+  transition: box-shadow var(--speed) ease-out, border-color var(--speed) ease-out;
+}
+
+/* While streaming the stop button breathes amber. */
+.composer-send.stop {
+  background: var(--accent);
+  color: var(--on-accent);
+  animation: stop-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes stop-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 138, 60, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(224, 138, 60, 0);
+  }
+}
+
+.composer-send:not(:disabled):hover {
+  transform: translateY(-1px);
+  transition: transform var(--speed-fast) ease-out;
+}
+
+.composer-send:not(:disabled):active {
+  transform: translateY(0) scale(0.96);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-send.stop {
+    animation: none;
+  }
+}

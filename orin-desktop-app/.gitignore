@@ -4,6 +4,10 @@ logs
 npm-debug.log*
 *.local
 
+# Secrets — tokens/keys never belong in git (use env or OS keyring instead)
+.env
+.env.*
+
 node_modules
 dist
 dist-ssr
